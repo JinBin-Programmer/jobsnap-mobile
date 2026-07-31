@@ -10,6 +10,8 @@ import {
   checkIn,
   checkOutAndComplete,
   checkOutOnly,
+  getOpenCheckin,
+  listCheckinUpdateTimes,
   distanceMeters,
   type Coords,
 } from "@/lib/tasks";
@@ -18,6 +20,8 @@ import type { Task, TaskStop } from "@/lib/types";
 import { colors } from "@/lib/theme";
 import ProofCaptureForm, { type CaptureSubmitPayload } from "@/components/ProofCaptureForm";
 import StopsMapView from "@/components/StopsMapView";
+import NavigateButtons from "@/components/NavigateButtons";
+import { isOnline, queueTaskSubmission, queueStopSubmission, flushQueue, getPendingCount } from "@/lib/offlineQueue";
 
 // How often to refresh GPS while this screen is open, to keep the
 // on-site/not-on-site banner reasonably live without hammering the battery.
@@ -44,6 +48,28 @@ export default function TaskDetailScreen() {
   const [stops, setStops] = useState<TaskStop[]>([]);
   const [activeStop, setActiveStop] = useState<TaskStop | null>(null);
 
+  // Offline queue — submissions saved locally because there was no
+  // connection when the worker tried to send them.
+  const [pendingCount, setPendingCount] = useState(0);
+  const [flushing, setFlushing] = useState(false);
+
+  const attemptFlush = async () => {
+    if (flushing) return;
+    setFlushing(true);
+    try {
+      const { remaining } = await flushQueue();
+      setPendingCount(remaining);
+    } finally {
+      setFlushing(false);
+    }
+  };
+
+  useEffect(() => {
+    getPendingCount().then(setPendingCount);
+    attemptFlush();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (!id) return;
     getTask(id).then((t) => {
@@ -52,6 +78,28 @@ export default function TaskDetailScreen() {
       if (t?.has_stops) listTaskStops(id).then(setStops);
     });
   }, [id]);
+
+  // Restore an in-progress visit — without this, backgrounding or killing
+  // the app mid-visit silently forgets the worker was checked in.
+  useEffect(() => {
+    if (!id || !profile?.id) return;
+    let cancelled = false;
+    getOpenCheckin(id, profile.id).then(async (open) => {
+      if (cancelled || !open) return;
+      setCheckinId(open.id);
+      setCheckInAt(new Date(open.checked_in_at).getTime());
+      setNow(Date.now());
+      setCheckedIn(true);
+      const times = await listCheckinUpdateTimes(open.id);
+      if (cancelled) return;
+      setSessionUpdates(
+        times.map((t) => ({ time: new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }))
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, profile?.id]);
 
   const refreshTaskAndStops = () => {
     if (!id) return;
@@ -123,7 +171,7 @@ export default function TaskDetailScreen() {
     if (!task || !profile?.org_id || !profile.id) return;
     const freshCoords = await getCurrentLocation();
     setCoords(freshCoords);
-    await submitUpdate({
+    const args = {
       orgId: profile.org_id,
       taskId: task.id,
       workerId: profile.id,
@@ -135,7 +183,25 @@ export default function TaskDetailScreen() {
       taskLng: task.location_lng,
       radiusM: task.upload_radius_m,
       checkinId,
-    });
+    };
+
+    if (!(await isOnline())) {
+      await queueTaskSubmission(args, task.title);
+      setPendingCount((n) => n + 1);
+      Alert.alert("Saved — no connection", "You're offline. This will send automatically once you're back online.");
+      return;
+    }
+    try {
+      await submitUpdate(args);
+    } catch (e) {
+      if (!(await isOnline())) {
+        await queueTaskSubmission(args, task.title);
+        setPendingCount((n) => n + 1);
+        Alert.alert("Saved — connection dropped", "This will send automatically once you're back online.");
+        return;
+      }
+      throw e;
+    }
     setSessionUpdates((prev) => [
       ...prev,
       { time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) },
@@ -147,7 +213,7 @@ export default function TaskDetailScreen() {
     if (!task || !profile?.org_id || !profile.id || !activeStop) return;
     const freshCoords = await getCurrentLocation();
     setCoords(freshCoords);
-    await submitStopUpdate({
+    const args = {
       orgId: profile.org_id,
       taskId: task.id,
       stopId: activeStop.id,
@@ -160,7 +226,26 @@ export default function TaskDetailScreen() {
       radiusM: activeStop.radius_m,
       checkinId,
       markDone: payload.markDone,
-    });
+    };
+
+    const label = `${task.title} — ${activeStop.label}`;
+    if (!(await isOnline())) {
+      await queueStopSubmission(args, label);
+      setPendingCount((n) => n + 1);
+      Alert.alert("Saved — no connection", "You're offline. This will send automatically once you're back online.");
+      return;
+    }
+    try {
+      await submitStopUpdate(args);
+    } catch (e) {
+      if (!(await isOnline())) {
+        await queueStopSubmission(args, label);
+        setPendingCount((n) => n + 1);
+        Alert.alert("Saved — connection dropped", "This will send automatically once you're back online.");
+        return;
+      }
+      throw e;
+    }
     refreshTaskAndStops();
     if (payload.markDone) {
       Alert.alert("Stop delivered", "Nice — marked as delivered.", [{ text: "OK", onPress: () => setActiveStop(null) }]);
@@ -173,6 +258,25 @@ export default function TaskDetailScreen() {
     if (!task || !checkinId) return;
     setCompleting(true);
     try {
+      // Re-check GPS at the moment of completing, not just at check-in — a
+      // worker could check in, then leave, then tap this from anywhere.
+      // Completion is a claim of finished work, so it's gated the same way
+      // proof uploads are. If they've genuinely already left, a manager can
+      // still complete it from the web dashboard — that path isn't gated.
+      if (isGated) {
+        const freshCoords = await getCurrentLocation();
+        setCoords(freshCoords);
+        const dist = freshCoords
+          ? distanceMeters(freshCoords, { lat: task.location_lat!, lng: task.location_lng! })
+          : null;
+        if (dist == null || dist > task.upload_radius_m) {
+          Alert.alert(
+            "Not on-site",
+            `You must be within ${task.upload_radius_m}m of the job site to mark it complete. If you've already left, ask your manager to complete it from the dashboard.`
+          );
+          return;
+        }
+      }
       await checkOutAndComplete(checkinId, task.id);
       setCheckedIn(false);
       setCheckinId(null);
@@ -245,6 +349,34 @@ export default function TaskDetailScreen() {
     </View>
   );
 
+  const pendingBanner =
+    pendingCount > 0 ? (
+      <TouchableOpacity
+        onPress={attemptFlush}
+        disabled={flushing}
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 8,
+          backgroundColor: colors.dangerBg,
+          borderWidth: 1,
+          borderColor: colors.dangerBorder,
+          borderRadius: 10,
+          padding: 12,
+          marginBottom: 16,
+        }}
+      >
+        {flushing ? (
+          <ActivityIndicator size="small" color={colors.danger} />
+        ) : (
+          <Text style={{ color: colors.danger, fontWeight: "700" }}>●</Text>
+        )}
+        <Text style={{ fontSize: 12.5, color: colors.dangerFg, flex: 1 }}>
+          {pendingCount} update{pendingCount === 1 ? "" : "s"} saved offline, not sent yet — tap to retry now
+        </Text>
+      </TouchableOpacity>
+    ) : null;
+
   if (task.has_stops) {
     const doneCount = stops.filter((s) => s.is_done).length;
     const pct = stops.length ? Math.round((doneCount / stops.length) * 100) : 0;
@@ -255,6 +387,8 @@ export default function TaskDetailScreen() {
         <Text style={{ fontSize: 12.5, color: colors.muted, marginBottom: 16 }}>
           {task.client_name ?? "—"} · {task.location_address ?? "No route set"}
         </Text>
+
+        {pendingBanner}
 
         {!checkedIn ? (
           <TouchableOpacity
@@ -404,6 +538,8 @@ export default function TaskDetailScreen() {
                   </Text>
                 </View>
 
+                {activeStopNotOnSite && <NavigateButtons lat={activeStop.lat} lng={activeStop.lng} />}
+
                 <ProofCaptureForm mode="stop" notOnSite={activeStopNotOnSite} onSubmit={handleStopSubmit} />
               </>
             )}
@@ -419,6 +555,8 @@ export default function TaskDetailScreen() {
       <Text style={{ fontSize: 12.5, color: colors.muted, marginBottom: 16 }}>
         {task.client_name ?? "—"} · {task.location_address ?? "No address"}
       </Text>
+
+      {pendingBanner}
 
       {isGated && (
         <View
@@ -441,6 +579,10 @@ export default function TaskDetailScreen() {
               : `On-site · GPS locked (${Math.round(distance ?? 0)}m from site, within ${task.upload_radius_m}m radius)`}
           </Text>
         </View>
+      )}
+
+      {isGated && notOnSite && (
+        <NavigateButtons lat={task.location_lat!} lng={task.location_lng!} />
       )}
 
       {!checkedIn ? (

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { View, Text, TextInput, TouchableOpacity, Image, ActivityIndicator, Alert } from "react-native";
+import { View, Text, TextInput, TouchableOpacity, Image, ActivityIndicator, Alert, Linking } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { WORKER_SETTABLE_STATUSES, STATUS_LABELS, type TaskStatus } from "@/lib/types";
 import { colors } from "@/lib/theme";
@@ -36,7 +36,20 @@ export default function ProofCaptureForm({ mode, notOnSite, onSubmit }: ProofCap
   const addFromCamera = async (kind: "photo" | "video") => {
     const perm = await ImagePicker.requestCameraPermissionsAsync();
     if (!perm.granted) {
-      Alert.alert("Camera needed", "Please allow camera access to capture proof of work.");
+      if (!perm.canAskAgain) {
+        // Permanently denied — re-requesting silently returns denied again,
+        // the only way out is the OS settings screen.
+        Alert.alert(
+          "Camera access needed",
+          "You've previously denied camera access. Open Settings to turn it on for JobSnap.",
+          [
+            { text: "Not now", style: "cancel" },
+            { text: "Open Settings", onPress: () => Linking.openSettings() },
+          ]
+        );
+      } else {
+        Alert.alert("Camera needed", "Please allow camera access to capture proof of work.");
+      }
       return;
     }
     const res = await ImagePicker.launchCameraAsync({
@@ -48,6 +61,22 @@ export default function ProofCaptureForm({ mode, notOnSite, onSubmit }: ProofCap
   };
 
   const addFromLibrary = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      if (!perm.canAskAgain) {
+        Alert.alert(
+          "Photo access needed",
+          "You've previously denied photo library access. Open Settings to turn it on for JobSnap.",
+          [
+            { text: "Not now", style: "cancel" },
+            { text: "Open Settings", onPress: () => Linking.openSettings() },
+          ]
+        );
+      } else {
+        Alert.alert("Photo access needed", "Please allow photo access to attach existing photos or videos.");
+      }
+      return;
+    }
     const res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images", "videos"],
       quality: 0.6,

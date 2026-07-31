@@ -8,6 +8,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Image,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { supabase } from "@/lib/supabase";
@@ -45,19 +46,10 @@ export default function LoginScreen() {
     >
       <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: "center", padding: 24 }}>
         <View style={{ alignItems: "center", marginBottom: 32 }}>
-          <View
-            style={{
-              width: 56,
-              height: 56,
-              borderRadius: 16,
-              backgroundColor: colors.primary,
-              alignItems: "center",
-              justifyContent: "center",
-              marginBottom: 12,
-            }}
-          >
-            <View style={{ width: 22, height: 22, borderRadius: 6, backgroundColor: colors.icy }} />
-          </View>
+          <Image
+            source={require("@/assets/logo-mark.png")}
+            style={{ width: 56, height: 56, borderRadius: 14, marginBottom: 12 }}
+          />
           <Text style={{ color: colors.ink, fontSize: 26, fontWeight: "800" }}>JobSnap</Text>
           <Text style={{ color: colors.muted, marginTop: 4 }}>Your jobs for the day.</Text>
         </View>

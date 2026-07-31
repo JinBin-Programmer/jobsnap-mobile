@@ -125,8 +125,14 @@ export default function GalleryScreen() {
             }}
           >
             <View style={{ height: 90, backgroundColor: colors.border }}>
-              {item.url && (
+              {item.url && item.type === "photo" && (
                 <Image source={{ uri: item.url }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+              )}
+              {item.url && item.type === "video" && (
+                <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+                  <Text style={{ fontSize: 20 }}>▶</Text>
+                  <Text style={{ fontSize: 10, fontWeight: "700", color: colors.muted, marginTop: 2 }}>VIDEO</Text>
+                </View>
               )}
             </View>
             <TouchableOpacity

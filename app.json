@@ -7,6 +7,7 @@
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
+    "icon": "./assets/icon.png",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.jobsnap.app",
@@ -16,7 +17,11 @@
     },
     "android": {
       "package": "com.jobsnap.app",
-      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"]
+      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0E0F11"
+      }
     },
     "plugins": [
       "expo-router",
@@ -40,7 +45,16 @@
           "ios": { "deploymentTarget": "15.5" }
         }
       ],
-      "expo-notifications"
+      "expo-notifications",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 160,
+          "resizeMode": "contain",
+          "backgroundColor": "#0E0F11"
+        }
+      ]
     ],
     "extra": {
       "eas": {

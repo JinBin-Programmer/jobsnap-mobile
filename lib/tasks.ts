@@ -1,7 +1,9 @@
 import * as FileSystem from "expo-file-system";
 import * as Location from "expo-location";
+import { Alert, Linking } from "react-native";
 import { decode } from "base64-arraybuffer";
 import { supabase } from "./supabase";
+import { sendPushToManagers } from "./push";
 import type { Task, TaskStatus, TaskPriority, MediaType, JobType, Client, MyMedia, TaskStop } from "./types";
 
 // ---- Reads ---------------------------------------------------------------
@@ -80,17 +82,40 @@ export interface Coords {
   accuracy: number | null;
 }
 
+const GPS_TIMEOUT_MS = 15000;
+
 export async function getCurrentLocation(): Promise<Coords | null> {
-  const { status } = await Location.requestForegroundPermissionsAsync();
-  if (status !== "granted") return null;
-  const pos = await Location.getCurrentPositionAsync({
-    accuracy: Location.Accuracy.High,
-  });
-  return {
-    lat: pos.coords.latitude,
-    lng: pos.coords.longitude,
-    accuracy: pos.coords.accuracy ?? null,
-  };
+  const { status, canAskAgain } = await Location.requestForegroundPermissionsAsync();
+  if (status !== "granted") {
+    if (!canAskAgain) {
+      // Permanently denied — re-requesting silently returns denied again.
+      Alert.alert(
+        "Location access needed",
+        "JobSnap needs your location to verify you're on-site. You've previously denied it — open Settings to turn it on.",
+        [
+          { text: "Not now", style: "cancel" },
+          { text: "Open Settings", onPress: () => Linking.openSettings() },
+        ]
+      );
+    }
+    return null;
+  }
+
+  try {
+    // GPS can hang indefinitely with poor signal (basements, dense
+    // buildings) — never let it spin forever with no feedback.
+    const pos = await Promise.race([
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("GPS timeout")), GPS_TIMEOUT_MS)),
+    ]);
+    return {
+      lat: pos.coords.latitude,
+      lng: pos.coords.longitude,
+      accuracy: pos.coords.accuracy ?? null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function distanceMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
@@ -131,7 +156,47 @@ function assertOnSite(
 
 // ---- Check-in / visit sessions --------------------------------------------
 
+export interface OpenCheckin {
+  id: string;
+  checked_in_at: string;
+}
+
+// The screen calls this on mount to restore an in-progress visit — without
+// it, backgrounding or killing the app mid-visit silently forgets the
+// worker was checked in, resetting the timer and letting them "check in"
+// again, which would otherwise create a second open visit row forever
+// orphaning the first (nothing ever sets its checked_out_at).
+export async function getOpenCheckin(taskId: string, workerId: string): Promise<OpenCheckin | null> {
+  const { data } = await supabase
+    .from("task_checkins")
+    .select("id, checked_in_at")
+    .eq("task_id", taskId)
+    .eq("worker_id", workerId)
+    .is("checked_out_at", null)
+    .order("checked_in_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return (data as OpenCheckin) ?? null;
+}
+
+// Updates sent during a specific visit — used to rebuild the "Sent this
+// visit" list on rehydration, not just on a fresh check-in.
+export async function listCheckinUpdateTimes(checkinId: string): Promise<string[]> {
+  const { data } = await supabase
+    .from("task_updates")
+    .select("created_at")
+    .eq("checkin_id", checkinId)
+    .order("created_at", { ascending: true });
+  return (data ?? []).map((u) => u.created_at as string);
+}
+
 export async function checkIn(taskId: string, workerId: string, orgId: string): Promise<string> {
+  // Reuse an existing open visit instead of creating a duplicate — the UI
+  // rehydrates from getOpenCheckin on mount, but this is the authoritative
+  // guard (e.g. a double-tap, or rehydration racing a fresh mount).
+  const existing = await getOpenCheckin(taskId, workerId);
+  if (existing) return existing.id;
+
   const { data, error } = await supabase
     .from("task_checkins")
     .insert({ org_id: orgId, task_id: taskId, worker_id: workerId })
@@ -148,8 +213,17 @@ export async function checkOutAndComplete(checkinId: string, taskId: string) {
     .eq("id", checkinId);
   if (coErr) throw coErr;
 
-  const { error: tErr } = await supabase.from("tasks").update({ status: "completed" }).eq("id", taskId);
+  const { data: task, error: tErr } = await supabase
+    .from("tasks")
+    .update({ status: "completed" })
+    .eq("id", taskId)
+    .select("org_id, title")
+    .single();
   if (tErr) throw tErr;
+
+  if (task) {
+    sendPushToManagers(task.org_id as string, "Job completed", `"${task.title}" was marked complete.`, { taskId });
+  }
 }
 
 // Ends the visit WITHOUT marking the task done — for a multi-stop task a
@@ -213,7 +287,7 @@ export interface MediaItem {
   fileName?: string;
 }
 
-interface SubmitUpdateArgs {
+export interface SubmitUpdateArgs {
   orgId: string;
   taskId: string;
   workerId: string;
@@ -312,7 +386,10 @@ export async function submitUpdate(args: SubmitUpdateArgs) {
   const { orgId, taskId, workerId, remark, status, coords, media, taskLat, taskLng, radiusM, checkinId } =
     args;
 
-  if (media.length > 0) assertOnSite(coords, taskLat, taskLng, radiusM);
+  // Gate on-site whenever this update carries proof of progress (a photo, or
+  // a status change/completion claim) — not just photos. A status change
+  // with no media would otherwise skip the location check entirely.
+  if (media.length > 0 || status) assertOnSite(coords, taskLat, taskLng, radiusM);
   await assertRoomFor(media);
 
   const { data: update, error: updErr } = await supabase
@@ -371,7 +448,9 @@ export async function submitStopUpdate(args: SubmitStopUpdateArgs) {
   const { orgId, taskId, stopId, workerId, remark, coords, media, stopLat, stopLng, radiusM, checkinId, markDone } =
     args;
 
-  if (media.length > 0) assertOnSite(coords, stopLat, stopLng, radiusM);
+  // Same reasoning as submitUpdate — gate whenever proof or a delivered
+  // claim is involved, not just when there's a photo.
+  if (media.length > 0 || markDone) assertOnSite(coords, stopLat, stopLng, radiusM);
   await assertRoomFor(media);
 
   const { data: update, error: updErr } = await supabase
@@ -421,12 +500,15 @@ export async function maybeCompleteStopsTask(taskId: string, checkinId: string |
   const total = stops.length;
   const done = stops.filter((s) => s.is_done).length;
 
-  const { data: task } = await supabase.from("tasks").select("status").eq("id", taskId).single();
+  const { data: task } = await supabase.from("tasks").select("status, org_id, title").eq("id", taskId).single();
   const currentStatus = task?.status as TaskStatus | undefined;
   if (currentStatus === "completed" || currentStatus === "verified" || currentStatus === "cancelled") return;
 
   if (done >= total) {
     await supabase.from("tasks").update({ status: "completed" }).eq("id", taskId);
+    if (task) {
+      sendPushToManagers(task.org_id as string, "Job completed", `"${task.title}" was marked complete.`, { taskId });
+    }
     if (checkinId) {
       await supabase
         .from("task_checkins")

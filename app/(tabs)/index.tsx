@@ -10,6 +10,7 @@ import {
 import { useRouter, useFocusEffect } from "expo-router";
 import { useAuth } from "@/lib/auth";
 import { listMyTasks } from "@/lib/tasks";
+import { flushQueue } from "@/lib/offlineQueue";
 import { STATUS_LABELS, type Task } from "@/lib/types";
 import { colors, STATUS_COLORS } from "@/lib/theme";
 
@@ -38,6 +39,11 @@ export default function MyJobsScreen() {
   useFocusEffect(
     useCallback(() => {
       load();
+      // Quietly retry anything saved offline from an earlier visit — no UI
+      // here (the task screen shows the detailed banner); this just gives
+      // queued submissions another chance to go out as soon as the app is
+      // opened, not only when the worker happens to revisit that job.
+      flushQueue().catch(() => {});
     }, [load])
   );
 
