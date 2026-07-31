@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "JobSnap",
+    "slug": "jobsnap-mobile",
+    "scheme": "jobsnap",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.jobsnap.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "JobSnap records where on-site work happens so your manager can verify the job location."
+      }
+    },
+    "android": {
+      "package": "com.jobsnap.app",
+      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"]
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "JobSnap needs photo access so you can attach photos of completed work.",
+          "cameraPermission": "JobSnap needs camera access so you can snap photos and video on the job."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "JobSnap records where on-site work happens so your manager can verify the job location."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": { "minSdkVersion": 24 },
+          "ios": { "deploymentTarget": "15.5" }
+        }
+      ],
+      "expo-notifications"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "350e04f5-54b9-4054-949f-bdd82a7b4d6b"
+      }
+    }
+  }
+}
