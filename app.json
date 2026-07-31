@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "JobSnap",
-    "slug": "jobsnap-mobile",
+    "slug": "jobsnap",
     "scheme": "jobsnap",
     "version": "1.0.0",
     "orientation": "portrait",
