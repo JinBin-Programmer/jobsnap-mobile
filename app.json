@@ -17,7 +17,10 @@
     },
     "android": {
       "package": "com.jobsnap.app",
-      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"],
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0E0F11"
@@ -41,8 +44,12 @@
       [
         "expo-build-properties",
         {
-          "android": { "minSdkVersion": 24 },
-          "ios": { "deploymentTarget": "15.5" }
+          "android": {
+            "minSdkVersion": 24
+          },
+          "ios": {
+            "deploymentTarget": "15.5"
+          }
         }
       ],
       "expo-notifications",
@@ -54,7 +61,8 @@
           "resizeMode": "contain",
           "backgroundColor": "#0E0F11"
         }
-      ]
+      ],
+      "expo-asset"
     ],
     "extra": {
       "eas": {
