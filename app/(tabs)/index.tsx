@@ -13,6 +13,7 @@ import { listMyTasks } from "@/lib/tasks";
 import { flushQueue } from "@/lib/offlineQueue";
 import { STATUS_LABELS, type Task } from "@/lib/types";
 import { colors, STATUS_COLORS } from "@/lib/theme";
+import KpiProgressCard from "@/components/KpiProgressCard";
 
 export default function MyJobsScreen() {
   const { session, profile } = useAuth();
@@ -100,6 +101,8 @@ export default function MyJobsScreen() {
           </TouchableOpacity>
         </View>
       </View>
+
+      <KpiProgressCard />
 
       <FlatList
         data={tasks}

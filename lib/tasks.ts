@@ -4,7 +4,7 @@ import { Alert, Linking } from "react-native";
 import { decode } from "base64-arraybuffer";
 import { supabase } from "./supabase";
 import { sendPushToManagers } from "./push";
-import type { Task, TaskStatus, TaskPriority, MediaType, JobType, Client, MyMedia, TaskStop } from "./types";
+import type { Task, TaskStatus, TaskPriority, MediaType, JobType, Client, MyMedia, TaskStop, KpiProgressRow } from "./types";
 
 // ---- Reads ---------------------------------------------------------------
 
@@ -304,6 +304,9 @@ export interface SubmitUpdateArgs {
   // Which check-in "visit" this update belongs to, if the worker is
   // currently checked in.
   checkinId: string | null;
+  // Cash/e-wallet amount collected on this job, if the org tracks money
+  // KPI — see getMoneyKpiEnabled(). null when not applicable/not entered.
+  amountCollected: number | null;
 }
 
 function guessContentType(uri: string, type: MediaType) {
@@ -383,7 +386,7 @@ async function uploadMediaFiles(orgId: string, taskId: string, updateId: string,
 }
 
 export async function submitUpdate(args: SubmitUpdateArgs) {
-  const { orgId, taskId, workerId, remark, status, coords, media, taskLat, taskLng, radiusM, checkinId } =
+  const { orgId, taskId, workerId, remark, status, coords, media, taskLat, taskLng, radiusM, checkinId, amountCollected } =
     args;
 
   // Gate on-site whenever this update carries proof of progress (a photo, or
@@ -404,6 +407,7 @@ export async function submitUpdate(args: SubmitUpdateArgs) {
       lng: coords?.lng ?? null,
       accuracy: coords?.accuracy ?? null,
       checkin_id: checkinId,
+      amount_collected: amountCollected,
     })
     .select("id")
     .single();
@@ -578,4 +582,24 @@ export async function getMyStorageUsedBytes(workerId: string): Promise<number> {
     .select("size_bytes")
     .in("update_id", updateIds);
   return (media ?? []).reduce((sum, m) => sum + ((m.size_bytes as number) ?? 0), 0);
+}
+
+// ---- KPI tracking (see supabase/kpi.sql) ----------------------------------
+
+// Whether the org wants money logged on job completion — decides if
+// ProofCaptureForm shows the "Amount collected" field at all.
+export async function getMoneyKpiEnabled(orgId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from("kpi_settings")
+    .select("money_kpi_enabled")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  return (data as { money_kpi_enabled: boolean } | null)?.money_kpi_enabled ?? false;
+}
+
+// A non-manager session only ever gets back its own row.
+export async function getMyKpiProgress(): Promise<KpiProgressRow | null> {
+  const { data } = await supabase.rpc("kpi_progress");
+  const rows = (data ?? []) as KpiProgressRow[];
+  return rows[0] ?? null;
 }

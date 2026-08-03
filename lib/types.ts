@@ -75,6 +75,7 @@ export interface TaskUpdate {
   lng: number | null;
   checkin_id: string | null;
   stop_id: string | null;
+  amount_collected: number | null;
   created_at: string;
 }
 
@@ -106,6 +107,26 @@ export interface MyMedia {
   size_bytes: number;
   created_at: string;
   url: string | null;
+}
+
+// KPI tracking — see supabase/kpi.sql. One row per worker, as returned by
+// the kpi_progress() RPC (a worker's own session only ever gets their own
+// row). Mirrors the web app's KpiProgressRow.
+export type KpiPeriod = "daily" | "weekly" | "monthly";
+
+export interface KpiProgressRow {
+  worker_id: string;
+  full_name: string | null;
+  task_enabled: boolean;
+  task_period: KpiPeriod;
+  task_target: number | null;
+  task_achieved: number;
+  task_bonus: number;
+  money_enabled: boolean;
+  money_period: KpiPeriod;
+  money_target: number | null;
+  money_achieved: number;
+  money_bonus: number;
 }
 
 export const STATUS_LABELS: Record<TaskStatus, string> = {

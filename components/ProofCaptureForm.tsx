@@ -10,6 +10,7 @@ export interface CaptureSubmitPayload {
   media: MediaItem[];
   status: TaskStatus | null; // mode="task" only
   markDone: boolean; // mode="stop" only
+  amountCollected: number | null; // mode="task" only, when moneyKpiEnabled
 }
 
 interface ProofCaptureFormProps {
@@ -19,6 +20,9 @@ interface ProofCaptureFormProps {
   // the stop done, e.g. "no answer, will retry").
   mode: "task" | "stop";
   notOnSite: boolean;
+  // Org tracks money KPI (supabase/kpi.sql) — shows an optional "Amount
+  // collected" field alongside the status chips. mode="task" only.
+  moneyKpiEnabled?: boolean;
   onSubmit: (payload: CaptureSubmitPayload) => Promise<void>;
 }
 
@@ -26,11 +30,12 @@ interface ProofCaptureFormProps {
 // Extracted out of app/task/[id].tsx so the same capture flow works both
 // for a classic single-location task and for one stop inside a multi-stop
 // delivery run.
-export default function ProofCaptureForm({ mode, notOnSite, onSubmit }: ProofCaptureFormProps) {
+export default function ProofCaptureForm({ mode, notOnSite, moneyKpiEnabled, onSubmit }: ProofCaptureFormProps) {
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [remark, setRemark] = useState("");
   const [status, setStatus] = useState<TaskStatus | null>(null);
   const [markDone, setMarkDone] = useState(false);
+  const [amount, setAmount] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   const addFromCamera = async (kind: "photo" | "video") => {
@@ -111,16 +116,19 @@ export default function ProofCaptureForm({ mode, notOnSite, onSubmit }: ProofCap
     }
     setSubmitting(true);
     try {
+      const parsedAmount = amount.trim() ? Number(amount) : null;
       await onSubmit({
         remark,
         media,
         status: mode === "task" ? status : null,
         markDone: mode === "stop" ? markDone : false,
+        amountCollected: mode === "task" && parsedAmount != null && Number.isFinite(parsedAmount) ? parsedAmount : null,
       });
       setMedia([]);
       setRemark("");
       setStatus(null);
       setMarkDone(false);
+      setAmount("");
     } catch (e) {
       Alert.alert("Could not send", e instanceof Error ? e.message : "Please try again.");
     } finally {
@@ -201,6 +209,32 @@ export default function ProofCaptureForm({ mode, notOnSite, onSubmit }: ProofCap
               );
             })}
           </View>
+
+          {moneyKpiEnabled && (
+            <>
+              <Text style={sectionTitle}>Amount collected (RM)</Text>
+              <TextInput
+                value={amount}
+                onChangeText={setAmount}
+                placeholder="e.g. 25.00"
+                placeholderTextColor={colors.muted}
+                keyboardType="decimal-pad"
+                style={{
+                  backgroundColor: colors.card,
+                  borderRadius: 8,
+                  borderWidth: 1,
+                  borderColor: colors.inputBorder,
+                  padding: 12,
+                  color: colors.ink,
+                  marginBottom: 6,
+                  fontSize: 13.5,
+                }}
+              />
+              <Text style={{ fontSize: 11.5, color: colors.muted, marginBottom: 16 }}>
+                Cash or e-wallet payment collected — snap it above as proof.
+              </Text>
+            </>
+          )}
         </>
       ) : (
         <TouchableOpacity

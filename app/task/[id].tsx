@@ -13,6 +13,7 @@ import {
   getOpenCheckin,
   listCheckinUpdateTimes,
   distanceMeters,
+  getMoneyKpiEnabled,
   type Coords,
 } from "@/lib/tasks";
 import { useAuth } from "@/lib/auth";
@@ -35,6 +36,7 @@ export default function TaskDetailScreen() {
   const [task, setTask] = useState<Task | null>(null);
   const [loading, setLoading] = useState(true);
   const [coords, setCoords] = useState<Coords | null>(null);
+  const [moneyKpiEnabled, setMoneyKpiEnabled] = useState(false);
 
   const [checkedIn, setCheckedIn] = useState(false);
   const [checkinId, setCheckinId] = useState<string | null>(null);
@@ -76,6 +78,7 @@ export default function TaskDetailScreen() {
       setTask(t);
       setLoading(false);
       if (t?.has_stops) listTaskStops(id).then(setStops);
+      if (t?.org_id) getMoneyKpiEnabled(t.org_id).then(setMoneyKpiEnabled);
     });
   }, [id]);
 
@@ -183,6 +186,7 @@ export default function TaskDetailScreen() {
       taskLng: task.location_lng,
       radiusM: task.upload_radius_m,
       checkinId,
+      amountCollected: payload.amountCollected,
     };
 
     if (!(await isOnline())) {
@@ -612,7 +616,12 @@ export default function TaskDetailScreen() {
             {sessionUpdates.length} update{sessionUpdates.length === 1 ? "" : "s"} sent
           </Text>
 
-          <ProofCaptureForm mode="task" notOnSite={notOnSite} onSubmit={handleTaskSubmit} />
+          <ProofCaptureForm
+            mode="task"
+            notOnSite={notOnSite}
+            moneyKpiEnabled={moneyKpiEnabled}
+            onSubmit={handleTaskSubmit}
+          />
 
           {sessionUpdates.length > 0 && (
             <>
