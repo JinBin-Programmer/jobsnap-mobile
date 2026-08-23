@@ -18,6 +18,7 @@ export const colors = {
 
   background: "#0E0F11",
   card: "#17181B",
+  cardRaised: "#1C1D21",
 
   border: "#26282C",
   borderStrong: "#34373C",
@@ -56,3 +57,66 @@ export const PRIORITY_COLORS: Record<TaskPriority, string> = {
   high: "#E3B15C",
   urgent: "#E2745C",
 };
+
+// 4px base — one scale used everywhere instead of ad-hoc padding/margin
+// numbers, so rhythm stays consistent across screens.
+export const space = {
+  xs: 4,
+  sm: 8,
+  md: 12,
+  lg: 16,
+  xl: 24,
+  xxl: 32,
+} as const;
+
+export const radius = {
+  sm: 8,
+  md: 12,
+  lg: 16,
+  xl: 20,
+  pill: 999,
+} as const;
+
+// React Native shadow props (iOS) paired with `elevation` (Android) — three
+// tiers instead of the one-off shadow values that used to be copy-pasted
+// per screen. Shadow color is a cool near-black matching the dark surfaces,
+// not pure black, so it reads as depth rather than a smudge.
+export const shadow = {
+  sm: {
+    shadowColor: "#05080A",
+    shadowOpacity: 0.28,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
+  },
+  md: {
+    shadowColor: "#05080A",
+    shadowOpacity: 0.34,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
+  },
+  lg: {
+    shadowColor: "#05080A",
+    shadowOpacity: 0.42,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 10,
+  },
+} as const;
+
+// A named type scale (size/weight/letterSpacing) instead of bare numbers
+// scattered per screen. "mono" is reserved for what the design brief calls
+// out as the one place monospace earns its keep here: real stamped data —
+// GPS coordinates, timestamps, the check-in clock — not decoration.
+export const type = {
+  display: { fontSize: 26, fontWeight: "800" as const, letterSpacing: -0.3 },
+  h1: { fontSize: 20, fontWeight: "800" as const, letterSpacing: -0.2 },
+  h2: { fontSize: 15, fontWeight: "700" as const },
+  label: { fontSize: 12, fontWeight: "700" as const, letterSpacing: 0.4, textTransform: "uppercase" as const },
+  body: { fontSize: 14, fontWeight: "500" as const },
+  bodyStrong: { fontSize: 14, fontWeight: "700" as const },
+  caption: { fontSize: 12, fontWeight: "500" as const },
+  mono: { fontSize: 13, fontWeight: "600" as const, fontFamily: "monospace" as const },
+  monoLg: { fontSize: 28, fontWeight: "700" as const, fontFamily: "monospace" as const, letterSpacing: 0.5 },
+} as const;

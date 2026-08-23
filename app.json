@@ -62,7 +62,8 @@
           "backgroundColor": "#0E0F11"
         }
       ],
-      "expo-asset"
+      "expo-asset",
+      "expo-font"
     ],
     "extra": {
       "eas": {

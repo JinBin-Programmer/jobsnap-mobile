@@ -1,10 +1,22 @@
 import { useEffect, useState } from "react";
-import { View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from "react-native";
+import { View, Text, TextInput, ScrollView, ActivityIndicator, Alert } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useAuth } from "@/lib/auth";
-import { listJobTypes, listClients, createSelfTask, getCurrentLocation, type Coords } from "@/lib/tasks";
+import {
+  listJobTypes,
+  listClients,
+  createSelfTask,
+  getCurrentLocation,
+  reverseGeocode,
+  type Coords,
+} from "@/lib/tasks";
 import type { JobType, Client, TaskPriority } from "@/lib/types";
-import { colors } from "@/lib/theme";
+import { colors, radius, space, type } from "@/lib/theme";
+import ScreenHeader from "@/components/ui/ScreenHeader";
+import Chip from "@/components/ui/Chip";
+import Button from "@/components/ui/Button";
+import StopsMapView from "@/components/StopsMapView";
 
 const PRIORITIES: TaskPriority[] = ["low", "medium", "high", "urgent"];
 const PRIORITY_LABELS: Record<TaskPriority, string> = {
@@ -27,9 +39,11 @@ export default function NewJobScreen() {
   const [jobTypeId, setJobTypeId] = useState<string | null>(null);
   const [clientId, setClientId] = useState<string | null>(null);
   const [priority, setPriority] = useState<TaskPriority>("medium");
-  const [radius, setRadius] = useState(150);
+  const [radius_, setRadiusM] = useState(150);
   const [pin, setPin] = useState<Coords | null>(null);
   const [placingPin, setPlacingPin] = useState(false);
+  const [address, setAddress] = useState<string | null>(null);
+  const [resolvingAddress, setResolvingAddress] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -37,7 +51,6 @@ export default function NewJobScreen() {
     Promise.all([listJobTypes(profile.org_id), listClients(profile.org_id)]).then(([jt, c]) => {
       setJobTypes(jt);
       setClients(c);
-      setJobTypeId(jt[0]?.id ?? null);
       setClientId(c[0]?.id ?? null);
       setLoadingOptions(false);
     });
@@ -52,6 +65,11 @@ export default function NewJobScreen() {
         return;
       }
       setPin(coords);
+      setAddress(null);
+      setResolvingAddress(true);
+      reverseGeocode(coords.lat, coords.lng)
+        .then(setAddress)
+        .finally(() => setResolvingAddress(false));
     } finally {
       setPlacingPin(false);
     }
@@ -77,7 +95,8 @@ export default function NewJobScreen() {
         clientId,
         priority,
         coords: pin,
-        radiusM: radius,
+        address,
+        radiusM: radius_,
       });
       router.replace(`/task/${taskId}`);
     } catch (e) {
@@ -96,162 +115,124 @@ export default function NewJobScreen() {
   }
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: colors.background }} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 16 }}>
-        <TouchableOpacity onPress={() => router.back()}>
-          <Text style={{ fontSize: 20, color: colors.primary }}>←</Text>
-        </TouchableOpacity>
-        <Text style={{ fontSize: 15, fontWeight: "700", color: colors.ink }}>New job</Text>
-      </View>
+    <ScrollView style={{ flex: 1, backgroundColor: colors.background }} contentContainerStyle={{ paddingBottom: space.xxl + 8 }}>
+      <ScreenHeader title="New job" />
 
-      <Text style={{ fontSize: 12.5, color: colors.muted, marginBottom: 16 }}>
-        Admin left this job out? Add it yourself and start uploading proof right away.
-      </Text>
+      <View style={{ paddingHorizontal: space.lg }}>
+        <Text style={{ fontSize: 12.5, color: colors.muted, marginBottom: space.lg }}>
+          Admin left this job out? Add it yourself and start uploading proof right away.
+        </Text>
 
-      <Label>Job title</Label>
-      <TextInput
-        value={title}
-        onChangeText={setTitle}
-        placeholder="e.g. Extra callback — leak recheck"
-        placeholderTextColor={colors.muted}
-        style={input}
-      />
+        <Label>Job title</Label>
+        <TextInput
+          value={title}
+          onChangeText={setTitle}
+          placeholder="e.g. Extra callback — leak recheck"
+          placeholderTextColor={colors.muted}
+          style={input}
+        />
 
-      <Label>Job type</Label>
-      <ChipRow>
-        {jobTypes.map((jt) => (
-          <Chip key={jt.id} label={jt.name} active={jobTypeId === jt.id} onPress={() => setJobTypeId(jt.id)} />
-        ))}
-      </ChipRow>
+        <Label>Job type (optional)</Label>
+        <ChipRow>
+          {jobTypes.map((jt) => (
+            <Chip key={jt.id} label={jt.name} active={jobTypeId === jt.id} onPress={() => setJobTypeId(jt.id)} />
+          ))}
+        </ChipRow>
 
-      <Label>Client</Label>
-      <ChipRow>
-        {clients.map((c) => (
-          <Chip key={c.id} label={c.name} active={clientId === c.id} onPress={() => setClientId(c.id)} />
-        ))}
-      </ChipRow>
+        <Label>Client</Label>
+        <ChipRow>
+          {clients.map((c) => (
+            <Chip key={c.id} label={c.name} active={clientId === c.id} onPress={() => setClientId(c.id)} />
+          ))}
+        </ChipRow>
 
-      <Label>Priority</Label>
-      <ChipRow>
-        {PRIORITIES.map((p) => (
-          <Chip key={p} label={PRIORITY_LABELS[p]} active={priority === p} onPress={() => setPriority(p)} />
-        ))}
-      </ChipRow>
+        <Label>Priority</Label>
+        <ChipRow>
+          {PRIORITIES.map((p) => (
+            <Chip key={p} label={PRIORITY_LABELS[p]} active={priority === p} onPress={() => setPriority(p)} />
+          ))}
+        </ChipRow>
 
-      <Label>Job site location</Label>
-      <TouchableOpacity
-        onPress={handlePlacePin}
-        disabled={placingPin}
-        style={{
-          height: 120,
-          borderRadius: 10,
-          borderWidth: 1,
-          borderColor: colors.inputBorder,
-          backgroundColor: colors.card,
-          alignItems: "center",
-          justifyContent: "center",
-          marginBottom: 6,
-        }}
-      >
-        {placingPin ? (
-          <ActivityIndicator color={colors.steel} />
-        ) : pin ? (
+        <Label>Job site location</Label>
+        <Button
+          label={placingPin ? "" : pin ? "Update pin to my location" : "Use my current location"}
+          onPress={handlePlacePin}
+          loading={placingPin}
+          variant="outline"
+          icon={!placingPin && <Ionicons name={pin ? "refresh" : "locate-outline"} size={16} color={colors.steel} />}
+          style={{ marginBottom: 6 }}
+        />
+        {pin && (
           <>
-            <Text style={{ fontSize: 22 }}>📍</Text>
-            <Text style={{ fontSize: 11, color: colors.body, fontFamily: "monospace", marginTop: 4 }}>
-              {pin.lat.toFixed(5)}, {pin.lng.toFixed(5)}
-            </Text>
+            <View style={{ marginBottom: 6 }}>
+              <StopsMapView stops={[{ id: "pin", lat: pin.lat, lng: pin.lng, done: false }]} height={140} />
+            </View>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: space.sm,
+                backgroundColor: colors.cardRaised,
+                borderRadius: radius.sm,
+                padding: space.sm + 2,
+                marginBottom: 6,
+              }}
+            >
+              <Ionicons name="location" size={16} color={colors.success} />
+              {resolvingAddress ? (
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1 }}>
+                  <ActivityIndicator size="small" color={colors.steel} />
+                  <Text style={{ color: colors.muted, fontSize: 12.5 }}>Finding address…</Text>
+                </View>
+              ) : (
+                <Text style={{ color: colors.body, fontSize: 12.5, flex: 1 }} numberOfLines={2}>
+                  {address ?? `${pin.lat.toFixed(5)}, ${pin.lng.toFixed(5)}`}
+                </Text>
+              )}
+            </View>
           </>
-        ) : (
-          <Text style={{ fontSize: 12.5, color: colors.steel, fontWeight: "600" }}>Use my current location</Text>
         )}
-      </TouchableOpacity>
-      <Text style={{ fontSize: 11, color: colors.muted, marginBottom: 14 }}>
-        Sets the pin to where you're standing right now — tap again to update it.
-      </Text>
+        <Text style={{ fontSize: 11, color: colors.muted, marginBottom: space.lg }}>
+          Sets the pin to where you're standing right now — tap again to update it.
+        </Text>
 
-      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 2 }}>
-        <Label noMargin>Upload radius</Label>
-        <Text style={{ fontFamily: "monospace", fontSize: 13, color: colors.primary, fontWeight: "700" }}>{radius}m</Text>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 2 }}>
+          <Label noMargin>Upload radius</Label>
+          <Text style={{ ...type.mono, color: colors.primary }}>{radius_}m</Text>
+        </View>
+        <ChipRow>
+          {RADIUS_PRESETS.map((r) => (
+            <Chip key={r} label={`${r}m`} active={radius_ === r} onPress={() => setRadiusM(r)} />
+          ))}
+        </ChipRow>
+        <Text style={{ fontSize: 11.5, color: colors.muted, marginTop: 6, marginBottom: space.lg + 2 }}>
+          Workers can only upload proof for this job from within {radius_}m of the pin. Uploads from the web
+          dashboard are never location-gated — that&apos;s admin access.
+        </Text>
+
+        <Button label="Create & start job" onPress={handleSubmit} loading={submitting} />
       </View>
-      <ChipRow>
-        {RADIUS_PRESETS.map((r) => (
-          <Chip key={r} label={`${r}m`} active={radius === r} onPress={() => setRadius(r)} />
-        ))}
-      </ChipRow>
-      <Text style={{ fontSize: 11.5, color: colors.muted, marginTop: 6, marginBottom: 18 }}>
-        Workers can only upload proof for this job from within {radius}m of the pin. Uploads from the web
-        dashboard are never location-gated — that&apos;s admin access.
-      </Text>
-
-      <TouchableOpacity
-        onPress={handleSubmit}
-        disabled={submitting}
-        style={{
-          backgroundColor: colors.primary,
-          borderRadius: 9,
-          paddingVertical: 13,
-          alignItems: "center",
-        }}
-      >
-        {submitting ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={{ color: "#fff", fontWeight: "700", fontSize: 14.5 }}>Create &amp; start job</Text>
-        )}
-      </TouchableOpacity>
     </ScrollView>
   );
 }
 
 function Label({ children, noMargin }: { children: React.ReactNode; noMargin?: boolean }) {
-  return (
-    <Text
-      style={{
-        fontSize: 12,
-        fontWeight: "700",
-        color: colors.muted,
-        textTransform: "uppercase",
-        letterSpacing: 0.3,
-        marginBottom: noMargin ? 0 : 6,
-      }}
-    >
-      {children}
-    </Text>
-  );
+  return <Text style={{ ...type.label, color: colors.muted, marginBottom: noMargin ? 0 : space.sm }}>{children}</Text>;
 }
 
 function ChipRow({ children }: { children: React.ReactNode }) {
-  return <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>{children}</View>;
-}
-
-function Chip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      style={{
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        borderRadius: 999,
-        borderWidth: 1,
-        borderColor: active ? colors.primary : colors.inputBorder,
-        backgroundColor: active ? colors.primary : colors.card,
-      }}
-    >
-      <Text style={{ color: active ? "#fff" : colors.body, fontWeight: "600", fontSize: 12.5 }}>{label}</Text>
-    </TouchableOpacity>
-  );
+  return <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: space.lg }}>{children}</View>;
 }
 
 const input = {
   width: "100%",
   borderWidth: 1,
   borderColor: colors.inputBorder,
-  borderRadius: 8,
-  paddingHorizontal: 12,
+  borderRadius: radius.sm,
+  paddingHorizontal: space.md,
   paddingVertical: 10,
   fontSize: 14,
   color: colors.ink,
-  marginBottom: 14,
+  marginBottom: space.lg,
   backgroundColor: colors.card,
 } as const;

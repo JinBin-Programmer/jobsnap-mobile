@@ -4,7 +4,18 @@ import { Alert, Linking } from "react-native";
 import { decode } from "base64-arraybuffer";
 import { supabase } from "./supabase";
 import { sendPushToManagers } from "./push";
-import type { Task, TaskStatus, TaskPriority, MediaType, JobType, Client, MyMedia, TaskStop, KpiProgressRow } from "./types";
+import type {
+  Task,
+  TaskStatus,
+  TaskPriority,
+  MediaType,
+  JobType,
+  Client,
+  MyMedia,
+  TaskStop,
+  KpiProgressRow,
+  CheckinLocationStatus,
+} from "./types";
 
 // ---- Reads ---------------------------------------------------------------
 
@@ -80,6 +91,11 @@ export interface Coords {
   lat: number;
   lng: number;
   accuracy: number | null;
+  // Android only — Location.getCurrentPositionAsync flags GPS spoofed by a
+  // mock-location app. Undefined on iOS (no equivalent signal there). A
+  // mocked reading is never trusted for an automatic on-site check-in, even
+  // if it happens to land inside the radius — see checkIn() below.
+  mocked: boolean;
 }
 
 const GPS_TIMEOUT_MS = 15000;
@@ -112,7 +128,39 @@ export async function getCurrentLocation(): Promise<Coords | null> {
       lat: pos.coords.latitude,
       lng: pos.coords.longitude,
       accuracy: pos.coords.accuracy ?? null,
+      mocked: pos.mocked ?? false,
     };
+  } catch {
+    return null;
+  }
+}
+
+// ---- Geocoding -------------------------------------------------------
+
+const NOMINATIM_HEADERS = {
+  Accept: "application/json",
+  "User-Agent": "JobSnap-Worker/1.0 (+https://jobsnap-web-black.vercel.app)",
+};
+const GEOCODE_TIMEOUT_MS = 5000;
+
+// Turns a raw GPS reading into a human-readable address, same free
+// OpenStreetMap Nominatim service the web dashboard uses (see
+// jobsnap/app/api/geocode/route.ts) — called directly here since a native
+// app isn't subject to the browser CORS restriction that forces the web
+// side through its own server proxy. Best-effort: a slow/unreachable
+// geocoder should never block a job submission, so failures just return
+// null and callers fall back to showing raw coordinates.
+export async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
+  try {
+    const res = await Promise.race([
+      fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`, {
+        headers: NOMINATIM_HEADERS,
+      }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("geocode timeout")), GEOCODE_TIMEOUT_MS)),
+    ]);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return (data?.display_name as string) ?? null;
   } catch {
     return null;
   }
@@ -159,6 +207,7 @@ function assertOnSite(
 export interface OpenCheckin {
   id: string;
   checked_in_at: string;
+  location_status: CheckinLocationStatus;
 }
 
 // The screen calls this on mount to restore an in-progress visit — without
@@ -169,7 +218,7 @@ export interface OpenCheckin {
 export async function getOpenCheckin(taskId: string, workerId: string): Promise<OpenCheckin | null> {
   const { data } = await supabase
     .from("task_checkins")
-    .select("id, checked_in_at")
+    .select("id, checked_in_at, location_status")
     .eq("task_id", taskId)
     .eq("worker_id", workerId)
     .is("checked_out_at", null)
@@ -177,6 +226,15 @@ export async function getOpenCheckin(taskId: string, workerId: string): Promise<
     .limit(1)
     .maybeSingle();
   return (data as OpenCheckin) ?? null;
+}
+
+// Re-read after check-in to refresh the "pending approval" badge once a
+// manager has acted — called from a focus-effect on the task screen rather
+// than a realtime subscription (this app has no realtime channels anywhere
+// else; push notifications + refetch-on-focus is the existing pattern).
+export async function getCheckinLocationStatus(checkinId: string): Promise<CheckinLocationStatus | null> {
+  const { data } = await supabase.from("task_checkins").select("location_status").eq("id", checkinId).maybeSingle();
+  return (data?.location_status as CheckinLocationStatus) ?? null;
 }
 
 // Updates sent during a specific visit — used to rebuild the "Sent this
@@ -190,20 +248,105 @@ export async function listCheckinUpdateTimes(checkinId: string): Promise<string[
   return (data ?? []).map((u) => u.created_at as string);
 }
 
-export async function checkIn(taskId: string, workerId: string, orgId: string): Promise<string> {
+export interface CheckInArgs {
+  taskId: string;
+  workerId: string;
+  orgId: string;
+  taskTitle: string;
+  // The job's site pin + radius (tasks.location_lat/lng, upload_radius_m) —
+  // the same fields that already gate photo uploads. null lat/lng = no pin
+  // set, so check-in is ungated (matches upload-gating behaviour).
+  taskLat: number | null;
+  taskLng: number | null;
+  radiusM: number;
+  coords: Coords | null;
+  // True only after the worker has confirmed the "you're not on-site, check
+  // in anyway?" prompt — the caller must show that prompt itself; checkIn()
+  // refuses to silently create a remote_pending row otherwise.
+  manuallyRequested: boolean;
+}
+
+export class NotOnSiteError extends Error {}
+
+export async function checkIn(args: CheckInArgs): Promise<{ id: string; locationStatus: CheckinLocationStatus }> {
+  const { taskId, workerId, orgId, taskTitle, taskLat, taskLng, radiusM, coords, manuallyRequested } = args;
+
   // Reuse an existing open visit instead of creating a duplicate — the UI
   // rehydrates from getOpenCheckin on mount, but this is the authoritative
   // guard (e.g. a double-tap, or rehydration racing a fresh mount).
   const existing = await getOpenCheckin(taskId, workerId);
-  if (existing) return existing.id;
+  if (existing) return { id: existing.id, locationStatus: existing.location_status };
+
+  // A worker's hours come from summing task_checkins durations — an open
+  // session on a different task left running (forgot to check out, or
+  // checked into the wrong job) would double-count time against both jobs.
+  // Auto-close any other open session before starting this one.
+  const { data: otherOpen } = await supabase
+    .from("task_checkins")
+    .select("id")
+    .eq("worker_id", workerId)
+    .neq("task_id", taskId)
+    .is("checked_out_at", null);
+  if (otherOpen && otherOpen.length > 0) {
+    await supabase
+      .from("task_checkins")
+      .update({ checked_out_at: new Date().toISOString() })
+      .in(
+        "id",
+        otherOpen.map((c) => c.id as string)
+      );
+  }
+
+  const isGated = taskLat != null && taskLng != null;
+  const distance = isGated && coords ? distanceMeters(coords, { lat: taskLat, lng: taskLng }) : null;
+  const withinRadius = distance != null && distance <= radiusM;
+  const gpsMocked = coords?.mocked ?? false;
+
+  let locationStatus: CheckinLocationStatus;
+  if (!isGated) {
+    locationStatus = "no_site_set";
+  } else if (withinRadius && !gpsMocked) {
+    locationStatus = "on_site";
+  } else {
+    // Out of radius (or GPS looks spoofed even though it claims to be
+    // in range) — only proceed if the worker has confirmed the prompt.
+    if (!manuallyRequested) {
+      throw new NotOnSiteError(
+        distance != null
+          ? `You're ${Math.round(distance)}m from the job site (must be within ${radiusM}m).`
+          : "We couldn't confirm your location for this job's site."
+      );
+    }
+    locationStatus = "remote_pending";
+  }
 
   const { data, error } = await supabase
     .from("task_checkins")
-    .insert({ org_id: orgId, task_id: taskId, worker_id: workerId })
+    .insert({
+      org_id: orgId,
+      task_id: taskId,
+      worker_id: workerId,
+      location_status: locationStatus,
+      check_in_lat: coords?.lat ?? null,
+      check_in_lng: coords?.lng ?? null,
+      check_in_accuracy: coords?.accuracy ?? null,
+      check_in_distance_m: distance,
+      gps_mocked: gpsMocked,
+    })
     .select("id")
     .single();
   if (error || !data) throw error ?? new Error("Failed to check in");
-  return data.id as string;
+
+  if (locationStatus === "remote_pending") {
+    sendPushToManagers(
+      orgId,
+      "Remote check-in needs approval",
+      `A worker checked in to "${taskTitle}" from ${distance != null ? `${Math.round(distance)}m away` : "an unconfirmed location"}.`,
+      { taskId, checkinId: data.id }
+    );
+  }
+
+  return { id: data.id as string, locationStatus };
 }
 
 export async function checkOutAndComplete(checkinId: string, taskId: string) {
@@ -248,6 +391,7 @@ interface CreateSelfTaskArgs {
   clientId: string | null;
   priority: TaskPriority;
   coords: Coords | null;
+  address: string | null;
   radiusM: number;
 }
 
@@ -255,7 +399,7 @@ interface CreateSelfTaskArgs {
 // here, so "placing the pin" uses the worker's own current GPS position —
 // the realistic case is a worker standing at the site adding it right now.
 export async function createSelfTask(args: CreateSelfTaskArgs): Promise<string> {
-  const { orgId, workerId, title, jobTypeId, clientId, priority, coords, radiusM } = args;
+  const { orgId, workerId, title, jobTypeId, clientId, priority, coords, address, radiusM } = args;
 
   const { data, error } = await supabase
     .from("tasks")
@@ -271,6 +415,7 @@ export async function createSelfTask(args: CreateSelfTaskArgs): Promise<string> 
       priority,
       location_lat: coords?.lat ?? null,
       location_lng: coords?.lng ?? null,
+      location_address: address,
       upload_radius_m: radiusM,
     })
     .select("id")
@@ -395,6 +540,8 @@ export async function submitUpdate(args: SubmitUpdateArgs) {
   if (media.length > 0 || status) assertOnSite(coords, taskLat, taskLng, radiusM);
   await assertRoomFor(media);
 
+  const locationAddress = coords ? await reverseGeocode(coords.lat, coords.lng) : null;
+
   const { data: update, error: updErr } = await supabase
     .from("task_updates")
     .insert({
@@ -406,6 +553,7 @@ export async function submitUpdate(args: SubmitUpdateArgs) {
       lat: coords?.lat ?? null,
       lng: coords?.lng ?? null,
       accuracy: coords?.accuracy ?? null,
+      location_address: locationAddress,
       checkin_id: checkinId,
       amount_collected: amountCollected,
     })
@@ -457,6 +605,8 @@ export async function submitStopUpdate(args: SubmitStopUpdateArgs) {
   if (media.length > 0 || markDone) assertOnSite(coords, stopLat, stopLng, radiusM);
   await assertRoomFor(media);
 
+  const locationAddress = coords ? await reverseGeocode(coords.lat, coords.lng) : null;
+
   const { data: update, error: updErr } = await supabase
     .from("task_updates")
     .insert({
@@ -468,6 +618,7 @@ export async function submitStopUpdate(args: SubmitStopUpdateArgs) {
       lat: coords?.lat ?? null,
       lng: coords?.lng ?? null,
       accuracy: coords?.accuracy ?? null,
+      location_address: locationAddress,
       checkin_id: checkinId,
       stop_id: stopId,
     })

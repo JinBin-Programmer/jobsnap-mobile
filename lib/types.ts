@@ -79,6 +79,12 @@ export interface TaskUpdate {
   created_at: string;
 }
 
+// Where a check-in happened relative to the task's site pin. A check-in made
+// off-site is optimistic: it starts immediately as 'remote_pending' and only
+// flips to 'remote_approved'/'remote_rejected' once a manager reviews it on
+// the web dashboard — see supabase/attendance.sql.
+export type CheckinLocationStatus = "on_site" | "no_site_set" | "remote_pending" | "remote_approved" | "remote_rejected";
+
 export interface TaskCheckin {
   id: string;
   org_id: string;
@@ -86,6 +92,8 @@ export interface TaskCheckin {
   worker_id: string;
   checked_in_at: string;
   checked_out_at: string | null;
+  location_status: CheckinLocationStatus;
+  check_in_distance_m: number | null;
 }
 
 export interface JobType {
@@ -127,6 +135,11 @@ export interface KpiProgressRow {
   money_target: number | null;
   money_achieved: number;
   money_bonus: number;
+  hours_enabled: boolean;
+  hours_period: KpiPeriod;
+  hours_target: number | null;
+  hours_achieved: number;
+  hours_bonus: number;
 }
 
 export const STATUS_LABELS: Record<TaskStatus, string> = {

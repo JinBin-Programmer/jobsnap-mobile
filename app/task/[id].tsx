@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Alert, BackHandler } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useCallback, useEffect, useState } from "react";
+import { View, Text, ScrollView, Pressable, ActivityIndicator, Alert, BackHandler } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
+import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import {
   getTask,
   getCurrentLocation,
@@ -11,17 +13,22 @@ import {
   checkOutAndComplete,
   checkOutOnly,
   getOpenCheckin,
+  getCheckinLocationStatus,
   listCheckinUpdateTimes,
   distanceMeters,
   getMoneyKpiEnabled,
+  NotOnSiteError,
   type Coords,
 } from "@/lib/tasks";
 import { useAuth } from "@/lib/auth";
-import type { Task, TaskStop } from "@/lib/types";
-import { colors } from "@/lib/theme";
+import type { Task, TaskStop, CheckinLocationStatus } from "@/lib/types";
+import { colors, radius, shadow, space, type } from "@/lib/theme";
 import ProofCaptureForm, { type CaptureSubmitPayload } from "@/components/ProofCaptureForm";
 import StopsMapView from "@/components/StopsMapView";
 import NavigateButtons from "@/components/NavigateButtons";
+import Button from "@/components/ui/Button";
+import StatusDot from "@/components/ui/StatusDot";
+import { useToast } from "@/components/ui/Toast";
 import { isOnline, queueTaskSubmission, queueStopSubmission, flushQueue, getPendingCount } from "@/lib/offlineQueue";
 
 // How often to refresh GPS while this screen is open, to keep the
@@ -32,6 +39,7 @@ export default function TaskDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { profile } = useAuth();
+  const { show: showToast } = useToast();
 
   const [task, setTask] = useState<Task | null>(null);
   const [loading, setLoading] = useState(true);
@@ -40,6 +48,7 @@ export default function TaskDetailScreen() {
 
   const [checkedIn, setCheckedIn] = useState(false);
   const [checkinId, setCheckinId] = useState<string | null>(null);
+  const [checkinStatus, setCheckinStatus] = useState<CheckinLocationStatus | null>(null);
   const [checkInAt, setCheckInAt] = useState<number | null>(null);
   const [now, setNow] = useState(Date.now());
   const [sessionUpdates, setSessionUpdates] = useState<{ time: string }[]>([]);
@@ -90,6 +99,7 @@ export default function TaskDetailScreen() {
     getOpenCheckin(id, profile.id).then(async (open) => {
       if (cancelled || !open) return;
       setCheckinId(open.id);
+      setCheckinStatus(open.location_status);
       setCheckInAt(new Date(open.checked_in_at).getTime());
       setNow(Date.now());
       setCheckedIn(true);
@@ -103,6 +113,32 @@ export default function TaskDetailScreen() {
       cancelled = true;
     };
   }, [id, profile?.id]);
+
+  // Re-check the pending/approved/rejected state whenever this screen comes
+  // back into focus — no realtime channel in this app, so a manager's
+  // approve/reject decision only shows up here on the next visit (a push
+  // notification also fires the moment they act, from checkIn()/the web
+  // dashboard's actions.ts).
+  useFocusEffect(
+    useCallback(() => {
+      if (!checkinId) return;
+      let cancelled = false;
+      getCheckinLocationStatus(checkinId).then((status) => {
+        if (cancelled || !status) return;
+        setCheckinStatus((prev) => {
+          if (prev === "remote_pending" && status === "remote_approved") {
+            showToast("Your check-in was approved.", "success");
+          } else if (prev === "remote_pending" && status === "remote_rejected") {
+            showToast("Your check-in wasn't approved — those hours won't count.", "error");
+          }
+          return status;
+        });
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, [checkinId, showToast])
+  );
 
   const refreshTaskAndStops = () => {
     if (!id) return;
@@ -153,18 +189,43 @@ export default function TaskDetailScreen() {
     activeStop && coords ? distanceMeters(coords, { lat: activeStop.lat, lng: activeStop.lng }) : null;
   const activeStopNotOnSite = !!activeStop && (activeStopDistance == null || activeStopDistance > activeStop.radius_m);
 
-  const handleCheckIn = async () => {
+  // A fresh GPS read is taken right here (not the periodically-polled
+  // `coords`, which can be up to LOCATION_REFRESH_MS stale) so the on-site
+  // decision reflects where the worker actually is the moment they tap the
+  // button — mirrors what handleTaskSubmit already does for uploads.
+  const handleCheckIn = async (manuallyRequested: boolean = false) => {
     if (!task || !profile?.org_id || !profile.id) return;
     setCheckingIn(true);
     try {
-      const newCheckinId = await checkIn(task.id, profile.id, profile.org_id);
-      setCheckinId(newCheckinId);
+      const freshCoords = await getCurrentLocation();
+      setCoords(freshCoords);
+      const result = await checkIn({
+        taskId: task.id,
+        workerId: profile.id,
+        orgId: profile.org_id,
+        taskTitle: task.title,
+        taskLat: task.location_lat,
+        taskLng: task.location_lng,
+        radiusM: task.upload_radius_m,
+        coords: freshCoords,
+        manuallyRequested,
+      });
+      setCheckinId(result.id);
+      setCheckinStatus(result.locationStatus);
       setCheckInAt(Date.now());
       setNow(Date.now());
       setSessionUpdates([]);
       setCheckedIn(true);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e) {
-      Alert.alert("Could not check in", e instanceof Error ? e.message : "Please try again.");
+      if (e instanceof NotOnSiteError) {
+        Alert.alert("You're not at the job site", `${e.message} You can still check in, but it'll need your admin's approval before the hours count.`, [
+          { text: "Cancel", style: "cancel" },
+          { text: "Check in anyway", onPress: () => handleCheckIn(true) },
+        ]);
+      } else {
+        Alert.alert("Could not check in", e instanceof Error ? e.message : "Please try again.");
+      }
     } finally {
       setCheckingIn(false);
     }
@@ -192,7 +253,7 @@ export default function TaskDetailScreen() {
     if (!(await isOnline())) {
       await queueTaskSubmission(args, task.title);
       setPendingCount((n) => n + 1);
-      Alert.alert("Saved — no connection", "You're offline. This will send automatically once you're back online.");
+      showToast("Saved offline — will send once you're back online", "error");
       return;
     }
     try {
@@ -201,7 +262,7 @@ export default function TaskDetailScreen() {
       if (!(await isOnline())) {
         await queueTaskSubmission(args, task.title);
         setPendingCount((n) => n + 1);
-        Alert.alert("Saved — connection dropped", "This will send automatically once you're back online.");
+        showToast("Connection dropped — saved to send later", "error");
         return;
       }
       throw e;
@@ -210,7 +271,8 @@ export default function TaskDetailScreen() {
       ...prev,
       { time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) },
     ]);
-    Alert.alert("Update sent", "Your manager can now see your update.");
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    showToast("Update sent");
   };
 
   const handleStopSubmit = async (payload: CaptureSubmitPayload) => {
@@ -236,7 +298,7 @@ export default function TaskDetailScreen() {
     if (!(await isOnline())) {
       await queueStopSubmission(args, label);
       setPendingCount((n) => n + 1);
-      Alert.alert("Saved — no connection", "You're offline. This will send automatically once you're back online.");
+      showToast("Saved offline — will send once you're back online", "error");
       return;
     }
     try {
@@ -245,16 +307,18 @@ export default function TaskDetailScreen() {
       if (!(await isOnline())) {
         await queueStopSubmission(args, label);
         setPendingCount((n) => n + 1);
-        Alert.alert("Saved — connection dropped", "This will send automatically once you're back online.");
+        showToast("Connection dropped — saved to send later", "error");
         return;
       }
       throw e;
     }
     refreshTaskAndStops();
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     if (payload.markDone) {
-      Alert.alert("Stop delivered", "Nice — marked as delivered.", [{ text: "OK", onPress: () => setActiveStop(null) }]);
+      showToast("Stop delivered");
+      setActiveStop(null);
     } else {
-      Alert.alert("Update sent", "Your manager can now see your update.");
+      showToast("Update sent");
     }
   };
 
@@ -284,10 +348,11 @@ export default function TaskDetailScreen() {
       await checkOutAndComplete(checkinId, task.id);
       setCheckedIn(false);
       setCheckinId(null);
+      setCheckinStatus(null);
       setCheckInAt(null);
-      Alert.alert("Job completed", "Marked as completed for your manager to review.", [
-        { text: "OK", onPress: () => router.back() },
-      ]);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      showToast("Job completed");
+      router.back();
     } catch (e) {
       Alert.alert("Could not complete", e instanceof Error ? e.message : "Please try again.");
     } finally {
@@ -305,6 +370,7 @@ export default function TaskDetailScreen() {
       await checkOutOnly(checkinId);
       setCheckedIn(false);
       setCheckinId(null);
+      setCheckinStatus(null);
       setCheckInAt(null);
     } catch (e) {
       Alert.alert("Could not end visit", e instanceof Error ? e.message : "Please try again.");
@@ -323,7 +389,7 @@ export default function TaskDetailScreen() {
 
   if (!task) {
     return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: colors.background, padding: 24 }}>
+      <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: colors.background, padding: space.xl }}>
         <Text style={{ color: colors.muted }}>This job is no longer available.</Text>
       </View>
     );
@@ -338,47 +404,70 @@ export default function TaskDetailScreen() {
     ? new Date(checkInAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : "";
 
+  // The one signature moment in the app: a live-pulsing dot + a real
+  // instrument-style monospace readout, standing in for "this GPS-verified
+  // visit is happening right now" — the whole product's value prop in one
+  // small piece of UI.
   const timerCard = (
-    <View style={{ backgroundColor: colors.primary, borderRadius: 12, padding: 16, marginBottom: 16 }}>
-      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 2 }}>
-        <Text style={{ fontSize: 12, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.3, color: "rgba(255,255,255,0.78)" }}>
-          Checked in
-        </Text>
-        <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: "#7FD79A" }} />
+    <View style={{ backgroundColor: colors.primary, borderRadius: radius.md, padding: space.lg, marginBottom: space.lg, ...shadow.md }}>
+      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+        <Text style={{ ...type.label, color: "rgba(255,255,255,0.78)" }}>Checked in</Text>
+        <StatusDot color="#7FD79A" size={7} />
       </View>
-      <Text style={{ fontFamily: "monospace", fontSize: 26, fontWeight: "600", color: "#fff", marginBottom: 4 }}>
+      <Text style={{ ...type.monoLg, color: "#fff", marginBottom: 4 }}>
         {hh}:{mm}:{ss}
       </Text>
       <Text style={{ fontSize: 12, color: "rgba(255,255,255,0.78)" }}>Since {checkInTimeLabel}</Text>
+      {checkinStatus === "remote_pending" && (
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 6,
+            backgroundColor: colors.dangerBg,
+            borderRadius: radius.sm,
+            paddingVertical: 6,
+            paddingHorizontal: 10,
+            marginTop: space.md,
+            alignSelf: "flex-start",
+          }}
+        >
+          <Ionicons name="time-outline" size={13} color={colors.dangerFg} />
+          <Text style={{ fontSize: 11.5, fontWeight: "700", color: colors.dangerFg }}>
+            Not on-site — waiting on your admin&apos;s approval
+          </Text>
+        </View>
+      )}
     </View>
   );
 
   const pendingBanner =
     pendingCount > 0 ? (
-      <TouchableOpacity
+      <Pressable
         onPress={attemptFlush}
         disabled={flushing}
-        style={{
+        style={({ pressed }) => ({
           flexDirection: "row",
           alignItems: "center",
-          gap: 8,
+          gap: space.sm,
           backgroundColor: colors.dangerBg,
           borderWidth: 1,
           borderColor: colors.dangerBorder,
-          borderRadius: 10,
-          padding: 12,
-          marginBottom: 16,
-        }}
+          borderRadius: radius.sm,
+          padding: space.md,
+          marginBottom: space.lg,
+          opacity: pressed ? 0.85 : 1,
+        })}
       >
         {flushing ? (
           <ActivityIndicator size="small" color={colors.danger} />
         ) : (
-          <Text style={{ color: colors.danger, fontWeight: "700" }}>●</Text>
+          <Ionicons name="cloud-offline-outline" size={17} color={colors.danger} />
         )}
         <Text style={{ fontSize: 12.5, color: colors.dangerFg, flex: 1 }}>
           {pendingCount} update{pendingCount === 1 ? "" : "s"} saved offline, not sent yet — tap to retry now
         </Text>
-      </TouchableOpacity>
+      </Pressable>
     ) : null;
 
   if (task.has_stops) {
@@ -387,32 +476,29 @@ export default function TaskDetailScreen() {
     const allDone = stops.length > 0 && doneCount === stops.length;
 
     return (
-      <ScrollView style={{ flex: 1, backgroundColor: colors.background }} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
-        <Text style={{ fontSize: 12.5, color: colors.muted, marginBottom: 16 }}>
+      <ScrollView style={{ flex: 1, backgroundColor: colors.background }} contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl + 8 }}>
+        <Text style={{ fontSize: 12.5, color: colors.muted, marginBottom: space.lg }}>
           {task.client_name ?? "—"} · {task.location_address ?? "No route set"}
         </Text>
 
         {pendingBanner}
 
         {!checkedIn ? (
-          <TouchableOpacity
-            onPress={handleCheckIn}
-            disabled={checkingIn}
-            style={{ backgroundColor: colors.primary, borderRadius: 9, paddingVertical: 14, alignItems: "center", marginBottom: 16 }}
-          >
-            {checkingIn ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={{ color: "#fff", fontWeight: "700", fontSize: 14.5 }}>Check in to start this run</Text>
-            )}
-          </TouchableOpacity>
+          <View style={{ marginBottom: space.lg }}>
+            <Button
+              label="Check in to start this run"
+              onPress={() => handleCheckIn()}
+              loading={checkingIn}
+              icon={!checkingIn && <Ionicons name="log-in-outline" size={17} color="#fff" />}
+            />
+          </View>
         ) : (
           <>
             {timerCard}
 
             {!activeStop ? (
               <>
-                <View style={{ marginBottom: 16 }}>
+                <View style={{ marginBottom: space.lg }}>
                   <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                     <Text style={sectionTitle}>
                       Stops — {doneCount} of {stops.length} delivered
@@ -425,9 +511,10 @@ export default function TaskDetailScreen() {
                 </View>
 
                 {allDone && (
-                  <View style={{ backgroundColor: colors.successBg, borderRadius: 10, padding: 12, marginBottom: 16 }}>
-                    <Text style={{ color: colors.successFg, fontWeight: "700", fontSize: 13 }}>
-                      🎉 All stops delivered — this job is marked completed.
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, backgroundColor: colors.successBg, borderRadius: radius.sm, padding: space.md, marginBottom: space.lg }}>
+                    <Ionicons name="checkmark-circle" size={18} color={colors.successFg} />
+                    <Text style={{ color: colors.successFg, fontWeight: "700", fontSize: 13, flex: 1 }}>
+                      All stops delivered — this job is marked completed.
                     </Text>
                   </View>
                 )}
@@ -442,31 +529,25 @@ export default function TaskDetailScreen() {
                   />
                 )}
 
-                <View style={{ marginTop: 16, marginBottom: 16 }}>
+                <View style={{ marginTop: space.lg, marginBottom: space.lg }}>
                   {stops.map((s) => (
-                    <TouchableOpacity
+                    <Pressable
                       key={s.id}
                       onPress={() => setActiveStop(s)}
-                      style={{
+                      style={({ pressed }) => ({
                         flexDirection: "row",
                         alignItems: "center",
                         gap: 10,
                         backgroundColor: colors.card,
                         borderWidth: 1,
                         borderColor: colors.border,
-                        borderRadius: 10,
-                        padding: 12,
-                        marginBottom: 8,
-                      }}
+                        borderRadius: radius.sm,
+                        padding: space.md,
+                        marginBottom: space.sm,
+                        opacity: pressed ? 0.85 : 1,
+                      })}
                     >
-                      <View
-                        style={{
-                          width: 10,
-                          height: 10,
-                          borderRadius: 5,
-                          backgroundColor: s.is_done ? colors.success : colors.steel,
-                        }}
-                      />
+                      <StatusDot color={s.is_done ? colors.success : colors.steel} size={10} pulse={false} />
                       <View style={{ flex: 1 }}>
                         <Text style={{ fontSize: 13.5, fontWeight: "700", color: colors.ink }}>{s.label}</Text>
                         {s.address && <Text style={{ fontSize: 11.5, color: colors.muted }}>{s.address}</Text>}
@@ -474,40 +555,18 @@ export default function TaskDetailScreen() {
                       <Text style={{ fontSize: 11.5, fontWeight: "700", color: s.is_done ? colors.success : colors.muted }}>
                         {s.is_done ? "Delivered" : "Pending"}
                       </Text>
-                    </TouchableOpacity>
+                    </Pressable>
                   ))}
                 </View>
 
-                <TouchableOpacity
-                  onPress={handleEndVisit}
-                  disabled={completing}
-                  style={{
-                    borderWidth: 1,
-                    borderColor: colors.primary,
-                    backgroundColor: colors.card,
-                    borderRadius: 9,
-                    paddingVertical: 13,
-                    alignItems: "center",
-                  }}
-                >
-                  {completing ? (
-                    <ActivityIndicator color={colors.primary} />
-                  ) : (
-                    <Text style={{ color: colors.primary, fontWeight: "700", fontSize: 14.5 }}>End visit</Text>
-                  )}
-                </TouchableOpacity>
+                <Button label="End visit" onPress={handleEndVisit} loading={completing} variant="outline" />
               </>
             ) : (
               <>
-                <TouchableOpacity
-                  onPress={() => setActiveStop(null)}
-                  style={{ flexDirection: "row", alignItems: "center", marginBottom: 14 }}
-                >
-                  <Text style={{ color: colors.primary, fontSize: 18 }}>‹</Text>
-                  <Text style={{ color: colors.primary, fontWeight: "700", fontSize: 13.5, marginLeft: 2 }}>
-                    Back to stops
-                  </Text>
-                </TouchableOpacity>
+                <Pressable onPress={() => setActiveStop(null)} style={{ flexDirection: "row", alignItems: "center", marginBottom: space.md + 2 }} hitSlop={8}>
+                  <Ionicons name="chevron-back" size={18} color={colors.primary} />
+                  <Text style={{ color: colors.primary, fontWeight: "700", fontSize: 13.5, marginLeft: 0 }}>Back to stops</Text>
+                </Pressable>
 
                 <Text style={{ fontSize: 15, fontWeight: "800", color: colors.ink, marginBottom: 2 }}>
                   {activeStop.label}
@@ -516,7 +575,7 @@ export default function TaskDetailScreen() {
                   <Text style={{ fontSize: 12.5, color: colors.muted, marginBottom: 6 }}>{activeStop.address}</Text>
                 )}
                 {activeStop.notes && (
-                  <Text style={{ fontSize: 12.5, color: colors.body, marginBottom: 10, fontStyle: "italic" }}>
+                  <Text style={{ fontSize: 12.5, color: colors.body, marginBottom: space.sm + 2, fontStyle: "italic" }}>
                     {activeStop.notes}
                   </Text>
                 )}
@@ -525,16 +584,16 @@ export default function TaskDetailScreen() {
                   style={{
                     flexDirection: "row",
                     alignItems: "center",
-                    gap: 8,
+                    gap: space.sm,
                     backgroundColor: activeStopNotOnSite ? colors.dangerBg : colors.successBg,
                     borderWidth: 1,
                     borderColor: activeStopNotOnSite ? colors.dangerBorder : colors.successBorder,
-                    borderRadius: 10,
-                    padding: 12,
-                    marginBottom: 16,
+                    borderRadius: radius.sm,
+                    padding: space.md,
+                    marginBottom: space.lg,
                   }}
                 >
-                  <Text style={{ color: activeStopNotOnSite ? colors.danger : colors.success, fontWeight: "700" }}>●</Text>
+                  <StatusDot color={activeStopNotOnSite ? colors.danger : colors.success} size={9} pulse={!activeStopNotOnSite} />
                   <Text style={{ fontSize: 12.5, color: activeStopNotOnSite ? colors.dangerFg : colors.successFg, flex: 1 }}>
                     {activeStopNotOnSite
                       ? `Not at this stop · ${activeStopDistance != null ? Math.round(activeStopDistance) : "?"}m away, must be within ${activeStop.radius_m}m to upload`
@@ -555,8 +614,8 @@ export default function TaskDetailScreen() {
 
   // Classic single-location task — unchanged behavior.
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: colors.background }} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
-      <Text style={{ fontSize: 12.5, color: colors.muted, marginBottom: 16 }}>
+    <ScrollView style={{ flex: 1, backgroundColor: colors.background }} contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl + 8 }}>
+      <Text style={{ fontSize: 12.5, color: colors.muted, marginBottom: space.lg }}>
         {task.client_name ?? "—"} · {task.location_address ?? "No address"}
       </Text>
 
@@ -567,16 +626,16 @@ export default function TaskDetailScreen() {
           style={{
             flexDirection: "row",
             alignItems: "center",
-            gap: 8,
+            gap: space.sm,
             backgroundColor: notOnSite ? colors.dangerBg : colors.successBg,
             borderWidth: 1,
             borderColor: notOnSite ? colors.dangerBorder : colors.successBorder,
-            borderRadius: 10,
-            padding: 12,
-            marginBottom: 16,
+            borderRadius: radius.sm,
+            padding: space.md,
+            marginBottom: space.lg,
           }}
         >
-          <Text style={{ color: notOnSite ? colors.danger : colors.success, fontWeight: "700" }}>●</Text>
+          <StatusDot color={notOnSite ? colors.danger : colors.success} size={9} pulse={!notOnSite} />
           <Text style={{ fontSize: 12.5, color: notOnSite ? colors.dangerFg : colors.successFg, flex: 1 }}>
             {notOnSite
               ? `Not on-site · ${distance != null ? Math.round(distance) : "?"}m away, must be within ${task.upload_radius_m}m to upload`
@@ -590,29 +649,20 @@ export default function TaskDetailScreen() {
       )}
 
       {!checkedIn ? (
-        <TouchableOpacity
-          onPress={handleCheckIn}
-          disabled={notOnSite || checkingIn}
-          style={{
-            backgroundColor: notOnSite ? colors.inputBorder : colors.primary,
-            borderRadius: 9,
-            paddingVertical: 14,
-            alignItems: "center",
-            marginBottom: 16,
-          }}
-        >
-          {checkingIn ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={{ color: "#fff", fontWeight: "700", fontSize: 14.5 }}>
-              {notOnSite ? "Move closer to site to check in" : "Check in to start visit"}
-            </Text>
-          )}
-        </TouchableOpacity>
+        <View style={{ marginBottom: space.lg }}>
+          <Button
+            label={notOnSite ? "Not on-site — request check-in" : "Check in to start visit"}
+            onPress={() => handleCheckIn()}
+            loading={checkingIn}
+            icon={
+              !checkingIn && <Ionicons name={notOnSite ? "alert-circle-outline" : "log-in-outline"} size={17} color="#fff" />
+            }
+          />
+        </View>
       ) : (
         <>
           {timerCard}
-          <Text style={{ fontSize: 12, color: colors.muted, marginTop: -12, marginBottom: 16 }}>
+          <Text style={{ fontSize: 12, color: colors.muted, marginTop: -12, marginBottom: space.lg }}>
             {sessionUpdates.length} update{sessionUpdates.length === 1 ? "" : "s"} sent
           </Text>
 
@@ -625,50 +675,32 @@ export default function TaskDetailScreen() {
 
           {sessionUpdates.length > 0 && (
             <>
-              <Text style={[sectionTitle, { marginTop: 4 }]}>Sent this visit</Text>
+              <Text style={{ ...sectionTitle, marginTop: 4 }}>Sent this visit</Text>
               {sessionUpdates.map((u, i) => (
                 <View
                   key={i}
                   style={{
                     flexDirection: "row",
                     alignItems: "center",
-                    gap: 8,
+                    gap: space.sm,
                     backgroundColor: colors.card,
                     borderWidth: 1,
                     borderColor: colors.border,
-                    borderRadius: 10,
+                    borderRadius: radius.sm,
                     padding: 10,
-                    marginBottom: 8,
+                    marginBottom: space.sm,
                   }}
                 >
-                  <Text style={{ color: colors.success, fontWeight: "700" }}>✓</Text>
-                  <Text style={{ fontSize: 12.5, color: colors.body, fontFamily: "monospace" }}>
-                    {u.time} · proof sent
-                  </Text>
+                  <Ionicons name="checkmark-circle" size={16} color={colors.success} />
+                  <Text style={{ ...type.mono, color: colors.body }}>{u.time} · proof sent</Text>
                 </View>
               ))}
             </>
           )}
 
-          <TouchableOpacity
-            onPress={handleComplete}
-            disabled={completing}
-            style={{
-              borderWidth: 1,
-              borderColor: colors.primary,
-              backgroundColor: colors.card,
-              borderRadius: 9,
-              paddingVertical: 13,
-              alignItems: "center",
-              marginTop: 4,
-            }}
-          >
-            {completing ? (
-              <ActivityIndicator color={colors.primary} />
-            ) : (
-              <Text style={{ color: colors.primary, fontWeight: "700", fontSize: 14.5 }}>Mark task complete</Text>
-            )}
-          </TouchableOpacity>
+          <View style={{ marginTop: 4 }}>
+            <Button label="Mark task complete" onPress={handleComplete} loading={completing} variant="outline" />
+          </View>
         </>
       )}
     </ScrollView>
@@ -676,10 +708,7 @@ export default function TaskDetailScreen() {
 }
 
 const sectionTitle = {
-  fontSize: 12,
-  fontWeight: "700",
+  ...type.label,
   color: colors.muted,
-  textTransform: "uppercase",
-  letterSpacing: 0.3,
-  marginBottom: 8,
+  marginBottom: space.sm,
 } as const;

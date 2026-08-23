@@ -12,19 +12,27 @@ export default function TabsLayout() {
   return (
     <Tabs
       screenOptions={{
-        headerStyle: { backgroundColor: colors.primary },
-        headerTintColor: "#fff",
+        // Each tab builds its own header (greeting / profile card), so the
+        // native title bar would just duplicate it — hidden here.
+        headerShown: false,
         tabBarActiveTintColor: colors.steel,
         tabBarInactiveTintColor: colors.muted,
-        tabBarStyle: { backgroundColor: colors.card, borderTopColor: colors.border },
+        tabBarStyle: {
+          backgroundColor: colors.card,
+          borderTopColor: colors.border,
+          height: 58,
+          paddingTop: 6,
+          paddingBottom: 8,
+        },
+        tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
           title: "My Jobs",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="clipboard-outline" color={color} size={size} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name={focused ? "clipboard" : "clipboard-outline"} color={color} size={size} />
           ),
         }}
       />
@@ -32,8 +40,8 @@ export default function TabsLayout() {
         name="settings"
         options={{
           title: "Settings",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="settings-outline" color={color} size={size} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name={focused ? "settings" : "settings-outline"} color={color} size={size} />
           ),
         }}
       />

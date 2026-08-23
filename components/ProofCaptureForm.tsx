@@ -1,9 +1,14 @@
 import { useState } from "react";
-import { View, Text, TextInput, TouchableOpacity, Image, ActivityIndicator, Alert, Linking } from "react-native";
+import { View, Text, TextInput, Pressable, Image, Alert, Linking } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { WORKER_SETTABLE_STATUSES, STATUS_LABELS, type TaskStatus } from "@/lib/types";
-import { colors } from "@/lib/theme";
+import { colors, radius, space, type } from "@/lib/theme";
 import type { MediaItem } from "@/lib/tasks";
+import IconTile from "@/components/ui/IconTile";
+import Chip from "@/components/ui/Chip";
+import Button from "@/components/ui/Button";
+import PhotoViewer from "@/components/ui/PhotoViewer";
 
 export interface CaptureSubmitPayload {
   remark: string;
@@ -37,6 +42,7 @@ export default function ProofCaptureForm({ mode, notOnSite, moneyKpiEnabled, onS
   const [markDone, setMarkDone] = useState(false);
   const [amount, setAmount] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [viewerUri, setViewerUri] = useState<string | null>(null);
 
   const addFromCamera = async (kind: "photo" | "video") => {
     const perm = await ImagePicker.requestCameraPermissionsAsync();
@@ -139,25 +145,28 @@ export default function ProofCaptureForm({ mode, notOnSite, moneyKpiEnabled, onS
   return (
     <View>
       <Text style={sectionTitle}>Add proof</Text>
-      <View style={{ flexDirection: "row", gap: 10, marginBottom: 12 }}>
-        <CaptureBtn label="Photo" icon="📷" onPress={() => addFromCamera("photo")} />
-        <CaptureBtn label="Video" icon="🎥" onPress={() => addFromCamera("video")} />
-        <CaptureBtn label="Gallery" icon="🖼" onPress={addFromLibrary} />
+      <View style={{ flexDirection: "row", gap: 10, marginBottom: space.md }}>
+        <IconTile icon="camera-outline" label="Photo" onPress={() => addFromCamera("photo")} />
+        <IconTile icon="videocam-outline" label="Video" onPress={() => addFromCamera("video")} />
+        <IconTile icon="images-outline" label="Gallery" onPress={addFromLibrary} />
       </View>
 
       {media.length > 0 && (
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: space.md }}>
           {media.map((m) => (
             <View key={m.uri} style={{ position: "relative" }}>
-              <Image source={{ uri: m.uri }} style={{ width: 84, height: 84, borderRadius: 10, backgroundColor: colors.border }} />
+              <Pressable onPress={() => m.type === "photo" && setViewerUri(m.uri)} disabled={m.type === "video"}>
+                <Image source={{ uri: m.uri }} style={{ width: 84, height: 84, borderRadius: radius.md, backgroundColor: colors.border }} />
+              </Pressable>
               {m.type === "video" && (
                 <View style={videoBadge}>
-                  <Text style={{ color: "white", fontSize: 10 }}>▶ video</Text>
+                  <Ionicons name="play" size={9} color="#fff" />
+                  <Text style={{ color: "white", fontSize: 10 }}>video</Text>
                 </View>
               )}
-              <TouchableOpacity onPress={() => removeMedia(m.uri)} style={removeBtn}>
-                <Text style={{ color: "white", fontWeight: "700", fontSize: 12 }}>✕</Text>
-              </TouchableOpacity>
+              <Pressable onPress={() => removeMedia(m.uri)} hitSlop={8} style={removeBtn}>
+                <Ionicons name="close" size={13} color="#fff" />
+              </Pressable>
             </View>
           ))}
         </View>
@@ -171,14 +180,14 @@ export default function ProofCaptureForm({ mode, notOnSite, moneyKpiEnabled, onS
         multiline
         style={{
           backgroundColor: colors.card,
-          borderRadius: 8,
+          borderRadius: radius.sm,
           borderWidth: 1,
           borderColor: colors.inputBorder,
-          padding: 12,
+          padding: space.md,
           minHeight: 56,
           textAlignVertical: "top",
           color: colors.ink,
-          marginBottom: 12,
+          marginBottom: space.md,
           fontSize: 13.5,
         }}
       />
@@ -186,28 +195,10 @@ export default function ProofCaptureForm({ mode, notOnSite, moneyKpiEnabled, onS
       {mode === "task" ? (
         <>
           <Text style={sectionTitle}>Status</Text>
-          <View style={{ flexDirection: "row", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
-            {WORKER_SETTABLE_STATUSES.map((s) => {
-              const active = status === s;
-              return (
-                <TouchableOpacity
-                  key={s}
-                  onPress={() => setStatus(active ? null : s)}
-                  style={{
-                    paddingHorizontal: 12,
-                    paddingVertical: 7,
-                    borderRadius: 999,
-                    borderWidth: 1,
-                    borderColor: active ? colors.primary : colors.inputBorder,
-                    backgroundColor: active ? colors.primary : colors.card,
-                  }}
-                >
-                  <Text style={{ color: active ? "#fff" : colors.body, fontWeight: "600", fontSize: 12 }}>
-                    {STATUS_LABELS[s]}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+          <View style={{ flexDirection: "row", gap: 6, marginBottom: space.lg, flexWrap: "wrap" }}>
+            {WORKER_SETTABLE_STATUSES.map((s) => (
+              <Chip key={s} label={STATUS_LABELS[s]} active={status === s} onPress={() => setStatus(status === s ? null : s)} />
+            ))}
           </View>
 
           {moneyKpiEnabled && (
@@ -221,31 +212,31 @@ export default function ProofCaptureForm({ mode, notOnSite, moneyKpiEnabled, onS
                 keyboardType="decimal-pad"
                 style={{
                   backgroundColor: colors.card,
-                  borderRadius: 8,
+                  borderRadius: radius.sm,
                   borderWidth: 1,
                   borderColor: colors.inputBorder,
-                  padding: 12,
+                  padding: space.md,
                   color: colors.ink,
                   marginBottom: 6,
                   fontSize: 13.5,
                 }}
               />
-              <Text style={{ fontSize: 11.5, color: colors.muted, marginBottom: 16 }}>
+              <Text style={{ fontSize: 11.5, color: colors.muted, marginBottom: space.lg }}>
                 Cash or e-wallet payment collected — snap it above as proof.
               </Text>
             </>
           )}
         </>
       ) : (
-        <TouchableOpacity
+        <Pressable
           onPress={() => setMarkDone((v) => !v)}
           style={{
             flexDirection: "row",
             alignItems: "center",
             gap: 10,
-            marginBottom: 16,
-            padding: 12,
-            borderRadius: 10,
+            marginBottom: space.lg,
+            padding: space.md,
+            borderRadius: radius.sm,
             borderWidth: 1,
             borderColor: markDone ? colors.success : colors.inputBorder,
             backgroundColor: markDone ? colors.successBg : colors.card,
@@ -263,70 +254,39 @@ export default function ProofCaptureForm({ mode, notOnSite, moneyKpiEnabled, onS
               justifyContent: "center",
             }}
           >
-            {markDone && <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>✓</Text>}
+            {markDone && <Ionicons name="checkmark" size={13} color="#fff" />}
           </View>
           <Text style={{ color: markDone ? colors.successFg : colors.body, fontWeight: "700", fontSize: 13.5 }}>
             Mark this stop delivered
           </Text>
-        </TouchableOpacity>
+        </Pressable>
       )}
 
-      <TouchableOpacity
+      <Button
+        label={notOnSite ? "Move closer to submit" : mode === "stop" ? "Submit stop proof" : "Submit proof"}
         onPress={handleSubmit}
-        disabled={submitting || notOnSite}
-        style={{
-          backgroundColor: notOnSite ? colors.inputBorder : colors.primary,
-          borderRadius: 9,
-          paddingVertical: 13,
-          alignItems: "center",
-          marginBottom: 8,
-        }}
-      >
-        {submitting ? (
-          <ActivityIndicator color="white" />
-        ) : (
-          <Text style={{ color: "white", fontWeight: "700", fontSize: 14.5 }}>
-            {notOnSite ? "Move closer to submit" : mode === "stop" ? "Submit stop proof" : "Submit proof"}
-          </Text>
-        )}
-      </TouchableOpacity>
+        loading={submitting}
+        disabled={notOnSite}
+        icon={!submitting && <Ionicons name="paper-plane-outline" size={16} color="#fff" />}
+      />
+      <PhotoViewer uri={viewerUri} onClose={() => setViewerUri(null)} />
     </View>
   );
 }
 
-function CaptureBtn({ label, icon, onPress }: { label: string; icon: string; onPress: () => void }) {
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      style={{
-        flex: 1,
-        backgroundColor: colors.card,
-        borderRadius: 10,
-        borderWidth: 1,
-        borderColor: colors.inputBorder,
-        paddingVertical: 16,
-        alignItems: "center",
-      }}
-    >
-      <Text style={{ fontSize: 22 }}>{icon}</Text>
-      <Text style={{ color: colors.body, marginTop: 4, fontWeight: "600", fontSize: 12.5 }}>{label}</Text>
-    </TouchableOpacity>
-  );
-}
-
 const sectionTitle = {
-  fontSize: 12,
-  fontWeight: "700",
+  ...type.label,
   color: colors.muted,
-  textTransform: "uppercase",
-  letterSpacing: 0.3,
-  marginBottom: 8,
+  marginBottom: space.sm,
 } as const;
 
 const videoBadge = {
   position: "absolute",
   bottom: 4,
   left: 4,
+  flexDirection: "row",
+  alignItems: "center",
+  gap: 3,
   backgroundColor: "rgba(0,0,0,0.6)",
   borderRadius: 4,
   paddingHorizontal: 4,

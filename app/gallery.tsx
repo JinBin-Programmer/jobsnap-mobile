@@ -1,11 +1,15 @@
 import { useCallback, useState } from "react";
-import { View, Text, FlatList, TouchableOpacity, Image, ActivityIndicator, Alert } from "react-native";
-import { useRouter, useFocusEffect } from "expo-router";
+import { View, Text, FlatList, Pressable, Image, ActivityIndicator, Alert } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { useFocusEffect } from "expo-router";
 import { useAuth } from "@/lib/auth";
 import { listMyMedia, deleteMyMedia, getMyStorageUsedBytes } from "@/lib/tasks";
 import { supabase } from "@/lib/supabase";
 import type { MyMedia } from "@/lib/types";
-import { colors } from "@/lib/theme";
+import { colors, radius, space, type } from "@/lib/theme";
+import ScreenHeader from "@/components/ui/ScreenHeader";
+import EmptyState from "@/components/ui/EmptyState";
+import PhotoViewer from "@/components/ui/PhotoViewer";
 
 function formatMb(bytes: number) {
   const mb = bytes / (1024 * 1024);
@@ -14,11 +18,11 @@ function formatMb(bytes: number) {
 
 export default function GalleryScreen() {
   const { session } = useAuth();
-  const router = useRouter();
   const [media, setMedia] = useState<MyMedia[]>([]);
   const [usedBytes, setUsedBytes] = useState(0);
   const [limitMb, setLimitMb] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [viewerUri, setViewerUri] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!session) return;
@@ -75,26 +79,19 @@ export default function GalleryScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 10, padding: 16 }}>
-        <TouchableOpacity onPress={() => router.back()}>
-          <Text style={{ fontSize: 20, color: colors.primary }}>←</Text>
-        </TouchableOpacity>
-        <Text style={{ fontSize: 15, fontWeight: "700", color: colors.ink }}>My uploads</Text>
-      </View>
+      <ScreenHeader title="My uploads" />
 
       <FlatList
         data={media}
         keyExtractor={(m) => m.id}
         numColumns={2}
         columnWrapperStyle={{ gap: 10 }}
-        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 24, gap: 10 }}
+        contentContainerStyle={{ paddingHorizontal: space.lg, paddingBottom: space.xl, gap: 10 }}
         ListHeaderComponent={
-          <View style={{ backgroundColor: colors.primary, borderRadius: 12, padding: 14, marginBottom: 16 }}>
+          <View style={{ backgroundColor: colors.primary, borderRadius: radius.md, padding: space.md, marginBottom: space.lg }}>
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-              <Text style={{ fontSize: 12, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.3, color: "rgba(255,255,255,0.78)" }}>
-                Your storage
-              </Text>
-              <Text style={{ fontSize: 12, color: "#fff", fontWeight: "700" }}>
+              <Text style={{ ...type.label, color: "rgba(255,255,255,0.78)" }}>Your storage</Text>
+              <Text style={{ ...type.mono, color: "#fff" }}>
                 {formatMb(usedBytes)} of {limitMb != null ? formatMb(limitBytes!) : "∞"}
               </Text>
             </View>
@@ -109,9 +106,7 @@ export default function GalleryScreen() {
           </View>
         }
         ListEmptyComponent={
-          <Text style={{ color: colors.muted, fontSize: 13.5, textAlign: "center", paddingVertical: 30 }}>
-            No uploads yet.
-          </Text>
+          <EmptyState icon="images-outline" title="No uploads yet" subtitle="Photos and videos you send from a job land here." />
         }
         renderItem={({ item }) => (
           <View
@@ -120,48 +115,51 @@ export default function GalleryScreen() {
               backgroundColor: colors.card,
               borderWidth: 1,
               borderColor: colors.border,
-              borderRadius: 12,
+              borderRadius: radius.md,
               overflow: "hidden",
             }}
           >
             <View style={{ height: 90, backgroundColor: colors.border }}>
               {item.url && item.type === "photo" && (
-                <Image source={{ uri: item.url }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+                <Pressable onPress={() => setViewerUri(item.url!)} style={{ flex: 1 }}>
+                  <Image source={{ uri: item.url }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+                </Pressable>
               )}
               {item.url && item.type === "video" && (
                 <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-                  <Text style={{ fontSize: 20 }}>▶</Text>
+                  <Ionicons name="play-circle" size={26} color={colors.muted} />
                   <Text style={{ fontSize: 10, fontWeight: "700", color: colors.muted, marginTop: 2 }}>VIDEO</Text>
                 </View>
               )}
             </View>
-            <TouchableOpacity
+            <Pressable
               onPress={() => handleDelete(item)}
-              style={{
+              hitSlop={6}
+              style={({ pressed }) => ({
                 position: "absolute",
                 top: 6,
                 right: 6,
-                width: 22,
-                height: 22,
-                borderRadius: 11,
-                backgroundColor: "rgba(31,36,48,0.55)",
+                width: 24,
+                height: 24,
+                borderRadius: 12,
+                backgroundColor: "rgba(20,22,26,0.68)",
                 alignItems: "center",
                 justifyContent: "center",
-              }}
+                opacity: pressed ? 0.7 : 1,
+              })}
             >
-              <Text style={{ color: "#fff", fontSize: 12, lineHeight: 12 }}>✕</Text>
-            </TouchableOpacity>
+              <Ionicons name="close" size={14} color="#fff" />
+            </Pressable>
             <View style={{ padding: 8 }}>
               <Text numberOfLines={1} style={{ fontSize: 11.5, fontWeight: "600", color: colors.ink }}>
                 {item.task_title}
               </Text>
-              <Text style={{ fontSize: 10.5, color: colors.muted, fontFamily: "monospace" }}>
-                {formatMb(item.size_bytes)}
-              </Text>
+              <Text style={{ ...type.mono, fontSize: 10.5, color: colors.muted }}>{formatMb(item.size_bytes)}</Text>
             </View>
           </View>
         )}
       />
+      <PhotoViewer uri={viewerUri} onClose={() => setViewerUri(null)} />
     </View>
   );
 }

@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { View, Text } from "react-native";
-import { colors } from "@/lib/theme";
+import { colors, radius, space, type } from "@/lib/theme";
 import { getMyKpiProgress } from "@/lib/tasks";
 import type { KpiPeriod, KpiProgressRow } from "@/lib/types";
+import Card from "@/components/ui/Card";
 
 const PERIOD_LABEL: Record<KpiPeriod, string> = {
   daily: "today",
@@ -17,6 +18,7 @@ function Bar({ pct }: { pct: number }) {
         style={{
           width: `${Math.min(100, pct)}%`,
           height: "100%",
+          borderRadius: 3,
           backgroundColor: pct >= 100 ? colors.success : colors.steel,
         }}
       />
@@ -36,19 +38,21 @@ function MetricRow({
   achieved: number;
   target: number | null;
   bonus: number;
-  unit: "pts" | "RM";
+  unit: "pts" | "RM" | "hrs";
   period: KpiPeriod;
 }) {
   if (target == null) return null;
   const pct = target > 0 ? Math.round((achieved / target) * 100) : 0;
+  const achievedLabel = unit === "RM" ? `RM${achieved.toFixed(0)}` : unit === "hrs" ? achieved.toFixed(1) : achieved;
+  const targetLabel = unit === "RM" ? `RM${target}` : unit === "hrs" ? `${target}h` : `${target} pts`;
   return (
-    <View style={{ marginTop: 10 }}>
+    <View style={{ marginTop: space.sm + 2 }}>
       <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
         <Text style={{ fontSize: 12, color: colors.muted, fontWeight: "600" }}>
           {label} · {PERIOD_LABEL[period]}
         </Text>
-        <Text style={{ fontSize: 12, color: colors.ink, fontWeight: "700" }}>
-          {unit === "RM" ? `RM${achieved.toFixed(0)}` : achieved} / {unit === "RM" ? `RM${target}` : `${target} pts`}
+        <Text style={{ ...type.mono, color: colors.ink }}>
+          {achievedLabel} / {targetLabel}
         </Text>
       </View>
       <Bar pct={pct} />
@@ -74,23 +78,12 @@ export default function KpiProgressCard() {
   if (!row) return null;
   const showTask = row.task_enabled && row.task_target != null;
   const showMoney = row.money_enabled && row.money_target != null;
-  if (!showTask && !showMoney) return null;
+  const showHours = row.hours_enabled && row.hours_target != null;
+  if (!showTask && !showMoney && !showHours) return null;
 
   return (
-    <View
-      style={{
-        marginHorizontal: 20,
-        marginBottom: 16,
-        padding: 14,
-        borderRadius: 14,
-        backgroundColor: colors.card,
-        borderWidth: 1,
-        borderColor: colors.border,
-      }}
-    >
-      <Text style={{ fontSize: 12, fontWeight: "700", color: colors.muted, textTransform: "uppercase", letterSpacing: 0.3 }}>
-        Your KPI
-      </Text>
+    <Card variant="flat" padding="md" style={{ marginHorizontal: space.lg, marginBottom: space.lg, borderRadius: radius.md }}>
+      <Text style={{ ...type.label, color: colors.muted }}>Your KPI</Text>
       {showTask && (
         <MetricRow
           label="Tasks"
@@ -111,6 +104,16 @@ export default function KpiProgressCard() {
           period={row.money_period}
         />
       )}
-    </View>
+      {showHours && (
+        <MetricRow
+          label="Hours worked"
+          achieved={row.hours_achieved}
+          target={row.hours_target}
+          bonus={row.hours_bonus}
+          unit="hrs"
+          period={row.hours_period}
+        />
+      )}
+    </Card>
   );
 }

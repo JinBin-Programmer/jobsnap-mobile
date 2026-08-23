@@ -4,6 +4,7 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import * as Notifications from "expo-notifications";
 import { AuthProvider } from "@/lib/auth";
+import { ToastProvider } from "@/components/ui/Toast";
 import { colors } from "@/lib/theme";
 
 export default function RootLayout() {
@@ -21,25 +22,27 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
-      <AuthProvider>
-        <StatusBar style="light" />
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="index" />
-          <Stack.Screen name="login" />
-          <Stack.Screen name="(tabs)" />
-          <Stack.Screen
-            name="task/[id]"
-            options={{
-              headerShown: true,
-              title: "Job",
-              headerStyle: { backgroundColor: colors.primary },
-              headerTintColor: "#fff",
-            }}
-          />
-          <Stack.Screen name="gallery" />
-          <Stack.Screen name="new-job" />
-        </Stack>
-      </AuthProvider>
+      <ToastProvider>
+        <AuthProvider>
+          <StatusBar style="light" />
+          <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="index" />
+            <Stack.Screen name="login" />
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen
+              name="task/[id]"
+              options={{
+                headerShown: true,
+                title: "Job",
+                headerStyle: { backgroundColor: colors.primary },
+                headerTintColor: "#fff",
+              }}
+            />
+            <Stack.Screen name="gallery" />
+            <Stack.Screen name="new-job" />
+          </Stack>
+        </AuthProvider>
+      </ToastProvider>
     </SafeAreaProvider>
   );
 }

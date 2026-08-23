@@ -1,18 +1,19 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
   TextInput,
-  TouchableOpacity,
-  ActivityIndicator,
+  Animated,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
   Image,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { supabase } from "@/lib/supabase";
-import { colors } from "@/lib/theme";
+import { colors, radius, shadow, space, type } from "@/lib/theme";
+import Button from "@/components/ui/Button";
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -20,6 +21,11 @@ export default function LoginScreen() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fade = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(fade, { toValue: 1, duration: 400, useNativeDriver: true }).start();
+  }, [fade]);
 
   const submit = async () => {
     setError(null);
@@ -44,75 +50,92 @@ export default function LoginScreen() {
       style={{ flex: 1, backgroundColor: colors.background }}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
-      <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: "center", padding: 24 }}>
-        <View style={{ alignItems: "center", marginBottom: 32 }}>
-          <Image
-            source={require("@/assets/logo-mark.png")}
-            style={{ width: 56, height: 56, borderRadius: 14, marginBottom: 12 }}
-          />
-          <Text style={{ color: colors.ink, fontSize: 26, fontWeight: "800" }}>JobSnap</Text>
-          <Text style={{ color: colors.muted, marginTop: 4 }}>Your jobs for the day.</Text>
-        </View>
+      <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: "center", padding: space.xl }} keyboardShouldPersistTaps="handled">
+        <Animated.View style={{ opacity: fade }}>
+          <View style={{ alignItems: "center", marginBottom: space.xxl }}>
+            <View
+              style={{
+                width: 72,
+                height: 72,
+                borderRadius: radius.xl,
+                backgroundColor: colors.card,
+                borderWidth: 1,
+                borderColor: colors.border,
+                alignItems: "center",
+                justifyContent: "center",
+                marginBottom: space.md,
+                ...shadow.md,
+              }}
+            >
+              <Image source={require("@/assets/logo-mark.png")} style={{ width: 44, height: 44, borderRadius: 10 }} />
+            </View>
+            <Text style={{ ...type.display, color: colors.ink }}>JobSnap</Text>
+            <Text style={{ color: colors.muted, marginTop: 4, fontSize: 13.5 }}>Your jobs for the day.</Text>
+          </View>
 
-        <Text style={{ color: colors.body, fontSize: 13, marginBottom: 6 }}>Email</Text>
-        <TextInput
-          value={email}
-          onChangeText={setEmail}
-          autoCapitalize="none"
-          keyboardType="email-address"
-          placeholder="you@example.com"
-          placeholderTextColor={colors.muted}
-          style={inputStyle}
-        />
+          <Text style={{ ...type.label, color: colors.muted, marginBottom: space.sm }}>Email</Text>
+          <View style={fieldWrap}>
+            <Ionicons name="mail-outline" size={18} color={colors.muted} />
+            <TextInput
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              placeholder="you@example.com"
+              placeholderTextColor={colors.muted}
+              style={fieldInput}
+            />
+          </View>
 
-        <Text style={{ color: colors.body, fontSize: 13, marginBottom: 6, marginTop: 16 }}>
-          Password
-        </Text>
-        <TextInput
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry
-          placeholder="••••••••"
-          placeholderTextColor={colors.muted}
-          style={inputStyle}
-        />
+          <Text style={{ ...type.label, color: colors.muted, marginBottom: space.sm, marginTop: space.lg }}>
+            Password
+          </Text>
+          <View style={fieldWrap}>
+            <Ionicons name="lock-closed-outline" size={18} color={colors.muted} />
+            <TextInput
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+              placeholder="••••••••"
+              placeholderTextColor={colors.muted}
+              style={fieldInput}
+            />
+          </View>
 
-        {error && <Text style={{ color: colors.danger, marginTop: 14 }}>{error}</Text>}
-
-        <TouchableOpacity
-          onPress={submit}
-          disabled={loading}
-          style={{
-            backgroundColor: colors.primary,
-            borderRadius: 9,
-            paddingVertical: 15,
-            alignItems: "center",
-            marginTop: 24,
-            opacity: loading ? 0.6 : 1,
-          }}
-        >
-          {loading ? (
-            <ActivityIndicator color="white" />
-          ) : (
-            <Text style={{ color: "white", fontWeight: "700", fontSize: 16 }}>Log In</Text>
+          {error && (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: space.lg }}>
+              <Ionicons name="alert-circle" size={16} color={colors.danger} />
+              <Text style={{ color: colors.danger, fontSize: 13, flex: 1 }}>{error}</Text>
+            </View>
           )}
-        </TouchableOpacity>
 
-        <Text style={{ color: colors.muted, marginTop: 20, textAlign: "center", fontSize: 13 }}>
-          Your account is created by your manager. Ask them for your login if you don&apos;t have one.
-        </Text>
+          <View style={{ marginTop: space.xl }}>
+            <Button label="Log in" onPress={submit} loading={loading} />
+          </View>
+
+          <Text style={{ color: colors.muted, marginTop: space.lg, textAlign: "center", fontSize: 12.5, lineHeight: 18 }}>
+            Your account is created by your manager. Ask them for your login if you don&apos;t have one.
+          </Text>
+        </Animated.View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
-const inputStyle = {
+const fieldWrap = {
+  flexDirection: "row",
+  alignItems: "center",
+  gap: space.sm,
   backgroundColor: colors.card,
   borderColor: colors.inputBorder,
   borderWidth: 1,
-  borderRadius: 8,
-  paddingHorizontal: 14,
-  paddingVertical: 12,
+  borderRadius: radius.md,
+  paddingHorizontal: space.md,
+} as const;
+
+const fieldInput = {
+  flex: 1,
+  paddingVertical: 13,
   color: colors.ink,
   fontSize: 16,
 } as const;
