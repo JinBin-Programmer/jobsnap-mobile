@@ -69,22 +69,30 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             style={{
               flexDirection: "row",
               alignItems: "center",
-              gap: space.sm,
+              gap: space.sm + 2,
               backgroundColor: colors.cardRaised,
               borderWidth: 1,
-              borderColor: colors.borderStrong,
+              borderColor: toast.kind === "success" ? colors.successBorder : colors.borderStrong,
               borderRadius: radius.md,
-              paddingVertical: 12,
-              paddingHorizontal: space.md,
+              paddingVertical: toast.kind === "success" ? 15 : 12,
+              paddingHorizontal: space.md + 2,
               ...shadow.lg,
             }}
           >
             <Ionicons
               name={toast.kind === "success" ? "checkmark-circle" : "alert-circle"}
-              size={18}
-              color={toast.kind === "success" ? colors.success : colors.danger}
+              size={toast.kind === "success" ? 23 : 18}
+              color={toast.kind === "success" ? colors.successFg : colors.danger}
             />
-            <Text style={{ ...type.body, color: colors.ink, flex: 1 }}>{toast.message}</Text>
+            <Text
+              style={{
+                ...(toast.kind === "success" ? type.bodyStrong : type.body),
+                color: colors.ink,
+                flex: 1,
+              }}
+            >
+              {toast.message}
+            </Text>
           </View>
         </Animated.View>
       )}

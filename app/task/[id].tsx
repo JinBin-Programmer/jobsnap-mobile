@@ -19,6 +19,7 @@ import {
   getMoneyKpiEnabled,
   NotOnSiteError,
   type Coords,
+  type UploadProgressCallback,
 } from "@/lib/tasks";
 import { useAuth } from "@/lib/auth";
 import type { Task, TaskStop, CheckinLocationStatus } from "@/lib/types";
@@ -231,7 +232,7 @@ export default function TaskDetailScreen() {
     }
   };
 
-  const handleTaskSubmit = async (payload: CaptureSubmitPayload) => {
+  const handleTaskSubmit = async (payload: CaptureSubmitPayload, onProgress?: UploadProgressCallback) => {
     if (!task || !profile?.org_id || !profile.id) return;
     const freshCoords = await getCurrentLocation();
     setCoords(freshCoords);
@@ -257,7 +258,7 @@ export default function TaskDetailScreen() {
       return;
     }
     try {
-      await submitUpdate(args);
+      await submitUpdate(args, onProgress);
     } catch (e) {
       if (!(await isOnline())) {
         await queueTaskSubmission(args, task.title);
@@ -272,10 +273,11 @@ export default function TaskDetailScreen() {
       { time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) },
     ]);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    showToast("Update sent");
+    const photoCount = payload.media.length;
+    showToast(photoCount > 0 ? `${photoCount} photo${photoCount === 1 ? "" : "s"} uploaded — update sent` : "Update sent");
   };
 
-  const handleStopSubmit = async (payload: CaptureSubmitPayload) => {
+  const handleStopSubmit = async (payload: CaptureSubmitPayload, onProgress?: UploadProgressCallback) => {
     if (!task || !profile?.org_id || !profile.id || !activeStop) return;
     const freshCoords = await getCurrentLocation();
     setCoords(freshCoords);
@@ -302,7 +304,7 @@ export default function TaskDetailScreen() {
       return;
     }
     try {
-      await submitStopUpdate(args);
+      await submitStopUpdate(args, onProgress);
     } catch (e) {
       if (!(await isOnline())) {
         await queueStopSubmission(args, label);
@@ -314,11 +316,13 @@ export default function TaskDetailScreen() {
     }
     refreshTaskAndStops();
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    const photoCount = payload.media.length;
+    const photoNote = photoCount > 0 ? `${photoCount} photo${photoCount === 1 ? "" : "s"} uploaded — ` : "";
     if (payload.markDone) {
-      showToast("Stop delivered");
+      showToast(`${photoNote}Stop delivered`);
       setActiveStop(null);
     } else {
-      showToast("Update sent");
+      showToast(`${photoNote}Update sent`);
     }
   };
 

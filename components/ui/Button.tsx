@@ -68,11 +68,10 @@ export default function Button({
           style,
         ]}
       >
-        {loading ? (
-          <ActivityIndicator color={p.fg} />
-        ) : (
+        {loading && <ActivityIndicator color={p.fg} />}
+        {(!loading || label) && (
           <>
-            {icon}
+            {!loading && icon}
             <Text style={{ color: p.fg, fontSize: size === "lg" ? 14.5 : 13, fontWeight: type.bodyStrong.fontWeight }}>
               {label}
             </Text>

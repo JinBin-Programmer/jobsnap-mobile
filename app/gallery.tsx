@@ -1,15 +1,17 @@
 import { useCallback, useState } from "react";
-import { View, Text, FlatList, Pressable, Image, ActivityIndicator, Alert } from "react-native";
+import { View, Text, FlatList, Pressable, Image, RefreshControl, Alert } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "expo-router";
 import { useAuth } from "@/lib/auth";
 import { listMyMedia, deleteMyMedia, getMyStorageUsedBytes } from "@/lib/tasks";
 import { supabase } from "@/lib/supabase";
+import { formatShortDate } from "@/lib/format";
 import type { MyMedia } from "@/lib/types";
 import { colors, radius, space, type } from "@/lib/theme";
 import ScreenHeader from "@/components/ui/ScreenHeader";
 import EmptyState from "@/components/ui/EmptyState";
 import PhotoViewer from "@/components/ui/PhotoViewer";
+import Skeleton from "@/components/ui/Skeleton";
 
 function formatMb(bytes: number) {
   const mb = bytes / (1024 * 1024);
@@ -22,6 +24,7 @@ export default function GalleryScreen() {
   const [usedBytes, setUsedBytes] = useState(0);
   const [limitMb, setLimitMb] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [viewerUri, setViewerUri] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -36,6 +39,7 @@ export default function GalleryScreen() {
     setUsedBytes(used);
     setLimitMb((quota.data as { limit_mb: number | null } | null)?.limit_mb ?? null);
     setLoading(false);
+    setRefreshing(false);
   }, [session]);
 
   useFocusEffect(
@@ -71,8 +75,16 @@ export default function GalleryScreen() {
 
   if (loading) {
     return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: colors.background }}>
-        <ActivityIndicator color={colors.primary} size="large" />
+      <View style={{ flex: 1, backgroundColor: colors.background }}>
+        <ScreenHeader title="My uploads" />
+        <View style={{ paddingHorizontal: space.lg }}>
+          <Skeleton height={70} radius={radius.md} style={{ marginBottom: space.lg }} />
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+            {[0, 1, 2, 3].map((i) => (
+              <Skeleton key={i} width="48%" height={140} radius={radius.md} />
+            ))}
+          </View>
+        </View>
       </View>
     );
   }
@@ -87,6 +99,16 @@ export default function GalleryScreen() {
         numColumns={2}
         columnWrapperStyle={{ gap: 10 }}
         contentContainerStyle={{ paddingHorizontal: space.lg, paddingBottom: space.xl, gap: 10 }}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => {
+              setRefreshing(true);
+              load();
+            }}
+            tintColor={colors.primary}
+          />
+        }
         ListHeaderComponent={
           <View style={{ backgroundColor: colors.primary, borderRadius: radius.md, padding: space.md, marginBottom: space.lg }}>
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
@@ -119,14 +141,17 @@ export default function GalleryScreen() {
               overflow: "hidden",
             }}
           >
-            <View style={{ height: 90, backgroundColor: colors.border }}>
-              {item.url && item.type === "photo" && (
-                <Pressable onPress={() => setViewerUri(item.url!)} style={{ flex: 1 }}>
-                  <Image source={{ uri: item.url }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
-                </Pressable>
-              )}
-              {item.url && item.type === "video" && (
-                <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+            <View style={{ height: 90, backgroundColor: colors.border, alignItems: "center", justifyContent: "center" }}>
+              {item.type === "photo" ? (
+                item.url ? (
+                  <Pressable onPress={() => setViewerUri(item.url!)} style={{ width: "100%", height: "100%" }}>
+                    <Image source={{ uri: item.url }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+                  </Pressable>
+                ) : (
+                  <Ionicons name="image-outline" size={22} color={colors.muted} />
+                )
+              ) : (
+                <View style={{ alignItems: "center" }}>
                   <Ionicons name="play-circle" size={26} color={colors.muted} />
                   <Text style={{ fontSize: 10, fontWeight: "700", color: colors.muted, marginTop: 2 }}>VIDEO</Text>
                 </View>
@@ -154,7 +179,10 @@ export default function GalleryScreen() {
               <Text numberOfLines={1} style={{ fontSize: 11.5, fontWeight: "600", color: colors.ink }}>
                 {item.task_title}
               </Text>
-              <Text style={{ ...type.mono, fontSize: 10.5, color: colors.muted }}>{formatMb(item.size_bytes)}</Text>
+              <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: 1 }}>
+                <Text style={{ ...type.mono, fontSize: 10.5, color: colors.muted }}>{formatMb(item.size_bytes)}</Text>
+                <Text style={{ fontSize: 10, color: colors.muted }}>{formatShortDate(item.created_at)}</Text>
+              </View>
             </View>
           </View>
         )}

@@ -432,6 +432,16 @@ export interface MediaItem {
   fileName?: string;
 }
 
+// Reports per-file progress through a media upload loop, keyed by the
+// item's index in the original `media` array — lets the capture form show
+// each thumbnail flip from spinner to checkmark as its own file lands,
+// instead of one opaque spinner for the whole batch. Not persisted with a
+// queued offline submission (functions don't survive the AsyncStorage JSON
+// round-trip), which is fine — a queued submission already shows its own
+// "saved offline" toast instead of live per-photo progress.
+export type MediaUploadStatus = "uploading" | "done";
+export type UploadProgressCallback = (index: number, status: MediaUploadStatus) => void;
+
 export interface SubmitUpdateArgs {
   orgId: string;
   taskId: string;
@@ -496,9 +506,16 @@ async function assertRoomFor(media: MediaItem[]) {
 // records it. Shared by submitUpdate (whole-task proof) and
 // submitStopUpdate (per-stop proof) — identical storage-path convention and
 // quota handling either way.
-async function uploadMediaFiles(orgId: string, taskId: string, updateId: string, media: MediaItem[]) {
+async function uploadMediaFiles(
+  orgId: string,
+  taskId: string,
+  updateId: string,
+  media: MediaItem[],
+  onProgress?: UploadProgressCallback
+) {
   for (let i = 0; i < media.length; i++) {
     const m = media[i];
+    onProgress?.(i, "uploading");
     const ext = m.uri.split(".").pop()?.split("?")[0] || (m.type === "video" ? "mp4" : "jpg");
     const path = `${orgId}/${taskId}/${updateId}/${Date.now()}_${i}.${ext}`;
 
@@ -527,10 +544,11 @@ async function uploadMediaFiles(orgId: string, taskId: string, updateId: string,
       if (mediaErr.message?.includes("STORAGE_LIMIT_REACHED")) throw new Error(QUOTA_MESSAGE);
       throw mediaErr;
     }
+    onProgress?.(i, "done");
   }
 }
 
-export async function submitUpdate(args: SubmitUpdateArgs) {
+export async function submitUpdate(args: SubmitUpdateArgs, onProgress?: UploadProgressCallback) {
   const { orgId, taskId, workerId, remark, status, coords, media, taskLat, taskLng, radiusM, checkinId, amountCollected } =
     args;
 
@@ -561,7 +579,7 @@ export async function submitUpdate(args: SubmitUpdateArgs) {
     .single();
   if (updErr || !update) throw updErr ?? new Error("Failed to save update");
 
-  await uploadMediaFiles(orgId, taskId, update.id as string, media);
+  await uploadMediaFiles(orgId, taskId, update.id as string, media, onProgress);
 
   // If the worker set a status, move the task too.
   if (status) {
@@ -596,7 +614,7 @@ export interface SubmitStopUpdateArgs {
 // coordinates/radius (not the task's — a multi-stop task has no single
 // site), and tags the update with stop_id so the timeline/report can tell
 // which stop the proof was for.
-export async function submitStopUpdate(args: SubmitStopUpdateArgs) {
+export async function submitStopUpdate(args: SubmitStopUpdateArgs, onProgress?: UploadProgressCallback) {
   const { orgId, taskId, stopId, workerId, remark, coords, media, stopLat, stopLng, radiusM, checkinId, markDone } =
     args;
 
@@ -626,7 +644,7 @@ export async function submitStopUpdate(args: SubmitStopUpdateArgs) {
     .single();
   if (updErr || !update) throw updErr ?? new Error("Failed to save update");
 
-  await uploadMediaFiles(orgId, taskId, update.id as string, media);
+  await uploadMediaFiles(orgId, taskId, update.id as string, media, onProgress);
 
   if (markDone) {
     const { error: stopErr } = await supabase

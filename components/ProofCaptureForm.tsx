@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { View, Text, TextInput, Pressable, Image, Alert, Linking } from "react-native";
+import { View, Text, TextInput, Pressable, Image, Alert, Linking, ActivityIndicator } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { WORKER_SETTABLE_STATUSES, STATUS_LABELS, type TaskStatus } from "@/lib/types";
 import { colors, radius, space, type } from "@/lib/theme";
-import type { MediaItem } from "@/lib/tasks";
+import type { MediaItem, MediaUploadStatus, UploadProgressCallback } from "@/lib/tasks";
 import IconTile from "@/components/ui/IconTile";
 import Chip from "@/components/ui/Chip";
 import Button from "@/components/ui/Button";
@@ -28,8 +28,13 @@ interface ProofCaptureFormProps {
   // Org tracks money KPI (supabase/kpi.sql) — shows an optional "Amount
   // collected" field alongside the status chips. mode="task" only.
   moneyKpiEnabled?: boolean;
-  onSubmit: (payload: CaptureSubmitPayload) => Promise<void>;
+  onSubmit: (payload: CaptureSubmitPayload, onProgress?: UploadProgressCallback) => Promise<void>;
 }
+
+// How long the last thumbnail's checkmark stays visible before the form
+// clears itself — long enough to register as a real confirmation, short
+// enough not to feel like it's blocking the next photo.
+const CLEAR_DELAY_MS = 550;
 
 // Camera/video/gallery capture, remark, status-or-delivered control, submit.
 // Extracted out of app/task/[id].tsx so the same capture flow works both
@@ -42,6 +47,7 @@ export default function ProofCaptureForm({ mode, notOnSite, moneyKpiEnabled, onS
   const [markDone, setMarkDone] = useState(false);
   const [amount, setAmount] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<Record<number, MediaUploadStatus>>({});
   const [viewerUri, setViewerUri] = useState<string | null>(null);
 
   const addFromCamera = async (kind: "photo" | "video") => {
@@ -121,15 +127,22 @@ export default function ProofCaptureForm({ mode, notOnSite, moneyKpiEnabled, onS
       return;
     }
     setSubmitting(true);
+    setUploadStatus({});
     try {
       const parsedAmount = amount.trim() ? Number(amount) : null;
-      await onSubmit({
-        remark,
-        media,
-        status: mode === "task" ? status : null,
-        markDone: mode === "stop" ? markDone : false,
-        amountCollected: mode === "task" && parsedAmount != null && Number.isFinite(parsedAmount) ? parsedAmount : null,
-      });
+      await onSubmit(
+        {
+          remark,
+          media,
+          status: mode === "task" ? status : null,
+          markDone: mode === "stop" ? markDone : false,
+          amountCollected: mode === "task" && parsedAmount != null && Number.isFinite(parsedAmount) ? parsedAmount : null,
+        },
+        (index, itemStatus) => setUploadStatus((prev) => ({ ...prev, [index]: itemStatus }))
+      );
+      // Let the worker actually see the last thumbnail flip to a checkmark
+      // before the form clears out from under it.
+      if (media.length > 0) await new Promise((resolve) => setTimeout(resolve, CLEAR_DELAY_MS));
       setMedia([]);
       setRemark("");
       setStatus(null);
@@ -139,6 +152,7 @@ export default function ProofCaptureForm({ mode, notOnSite, moneyKpiEnabled, onS
       Alert.alert("Could not send", e instanceof Error ? e.message : "Please try again.");
     } finally {
       setSubmitting(false);
+      setUploadStatus({});
     }
   };
 
@@ -153,22 +167,47 @@ export default function ProofCaptureForm({ mode, notOnSite, moneyKpiEnabled, onS
 
       {media.length > 0 && (
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: space.md }}>
-          {media.map((m) => (
-            <View key={m.uri} style={{ position: "relative" }}>
-              <Pressable onPress={() => m.type === "photo" && setViewerUri(m.uri)} disabled={m.type === "video"}>
-                <Image source={{ uri: m.uri }} style={{ width: 84, height: 84, borderRadius: radius.md, backgroundColor: colors.border }} />
-              </Pressable>
-              {m.type === "video" && (
-                <View style={videoBadge}>
-                  <Ionicons name="play" size={9} color="#fff" />
-                  <Text style={{ color: "white", fontSize: 10 }}>video</Text>
-                </View>
-              )}
-              <Pressable onPress={() => removeMedia(m.uri)} hitSlop={8} style={removeBtn}>
-                <Ionicons name="close" size={13} color="#fff" />
-              </Pressable>
-            </View>
-          ))}
+          {media.map((m, i) => {
+            const itemStatus = uploadStatus[i];
+            return (
+              <View key={m.uri} style={{ position: "relative" }}>
+                <Pressable
+                  onPress={() => m.type === "photo" && setViewerUri(m.uri)}
+                  disabled={m.type === "video" || submitting}
+                >
+                  <Image
+                    source={{ uri: m.uri }}
+                    style={{
+                      width: 84,
+                      height: 84,
+                      borderRadius: radius.md,
+                      backgroundColor: colors.border,
+                      opacity: submitting ? 0.5 : 1,
+                    }}
+                  />
+                </Pressable>
+                {m.type === "video" && !submitting && (
+                  <View style={videoBadge}>
+                    <Ionicons name="play" size={9} color="#fff" />
+                    <Text style={{ color: "white", fontSize: 10 }}>video</Text>
+                  </View>
+                )}
+                {submitting ? (
+                  <View style={uploadOverlay} pointerEvents="none">
+                    {itemStatus === "done" ? (
+                      <Ionicons name="checkmark-circle" size={26} color={colors.successFg} />
+                    ) : (
+                      <ActivityIndicator size="small" color="#fff" />
+                    )}
+                  </View>
+                ) : (
+                  <Pressable onPress={() => removeMedia(m.uri)} hitSlop={8} style={removeBtn}>
+                    <Ionicons name="close" size={13} color="#fff" />
+                  </Pressable>
+                )}
+              </View>
+            );
+          })}
         </View>
       )}
 
@@ -263,7 +302,15 @@ export default function ProofCaptureForm({ mode, notOnSite, moneyKpiEnabled, onS
       )}
 
       <Button
-        label={notOnSite ? "Move closer to submit" : mode === "stop" ? "Submit stop proof" : "Submit proof"}
+        label={
+          notOnSite
+            ? "Move closer to submit"
+            : submitting && media.length > 0
+              ? `Uploading ${Math.min(Object.values(uploadStatus).filter((s) => s === "done").length + 1, media.length)} of ${media.length}…`
+              : mode === "stop"
+                ? "Submit stop proof"
+                : "Submit proof"
+        }
         onPress={handleSubmit}
         loading={submitting}
         disabled={notOnSite}
@@ -278,6 +325,18 @@ const sectionTitle = {
   ...type.label,
   color: colors.muted,
   marginBottom: space.sm,
+} as const;
+
+const uploadOverlay = {
+  position: "absolute",
+  top: 0,
+  left: 0,
+  right: 0,
+  bottom: 0,
+  borderRadius: radius.md,
+  backgroundColor: "rgba(0,0,0,0.4)",
+  alignItems: "center",
+  justifyContent: "center",
 } as const;
 
 const videoBadge = {
